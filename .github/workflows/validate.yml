@@ -1,0 +1,42 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: |
+          uv venv --python 3.14
+          uv pip install -r requirements_test.txt
+      - name: Ruff
+        run: .venv/bin/ruff check . && .venv/bin/ruff format --check .
+      - name: Translations in sync
+        run: diff custom_components/hydro_grow_planner/strings.json custom_components/hydro_grow_planner/translations/en.json
+      - name: Pytest
+        run: .venv/bin/pytest

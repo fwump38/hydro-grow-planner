@@ -1,0 +1,13 @@
+{
+  "domain": "hydro_grow_planner",
+  "name": "Hydro Grow Planner",
+  "codeowners": ["@fwump38"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/fwump38/hydro-grow-planner",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/fwump38/hydro-grow-planner/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

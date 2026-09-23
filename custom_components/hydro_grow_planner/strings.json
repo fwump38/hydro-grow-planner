@@ -1,0 +1,432 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a grow system",
+        "description": "A grow system is one set of devices that follows one grow plan at a time — for example a single hydroponic tower.",
+        "data": {
+          "name": "Name",
+          "devices": "Controlled devices",
+          "ph_sensor": "pH sensor",
+          "ec_sensor": "EC sensor"
+        },
+        "data_description": {
+          "devices": "Switches, lights, fans or input booleans the grow plan should drive (lights, pump, …).",
+          "ph_sensor": "Optional. Leave empty to log pH readings by hand.",
+          "ec_sensor": "Optional. Leave empty to log EC readings by hand."
+        }
+      },
+      "device_names": {
+        "title": "Name your devices",
+        "description": "Give each device a short name as it should appear in plans, e.g. \"Side lights\" or \"Water pump\"."
+      }
+    },
+    "error": {
+      "no_devices": "Select at least one device."
+    },
+    "abort": {
+      "already_configured": "A grow system with this name already exists."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Grow system options",
+        "menu_options": {
+          "settings": "Alerts and reminders",
+          "sensors": "pH and EC sensors",
+          "add_devices": "Add devices",
+          "rename_device": "Rename or re-point a device",
+          "remove_device": "Remove devices"
+        }
+      },
+      "settings": {
+        "title": "Alerts and reminders",
+        "data": {
+          "ph_tolerance": "pH tolerance",
+          "ec_tolerance": "EC tolerance",
+          "reading_interval_days": "Water reading interval (days)",
+          "reminder_time": "Daily reminder time",
+          "auto_advance": "Advance stages automatically"
+        },
+        "data_description": {
+          "ph_tolerance": "pH is flagged when it drifts further than this from the plan's target.",
+          "ec_tolerance": "EC is flagged when it drifts further than this from the stage's target.",
+          "reading_interval_days": "A manual reading is flagged overdue after this many days.",
+          "reminder_time": "When the daily \"tasks due\" event fires.",
+          "auto_advance": "Move to the next stage at midnight once a stage's estimated days have passed. When off, stages only change when you advance them."
+        }
+      },
+      "sensors": {
+        "title": "pH and EC sensors",
+        "data": {
+          "ph_sensor": "pH sensor",
+          "ec_sensor": "EC sensor"
+        },
+        "data_description": {
+          "ph_sensor": "Leave empty to log pH readings by hand.",
+          "ec_sensor": "Leave empty to log EC readings by hand."
+        }
+      },
+      "add_devices": {
+        "title": "Add devices",
+        "description": "New devices are left alone by existing plans until you give them a schedule in each stage.",
+        "data": {
+          "devices": "Devices"
+        }
+      },
+      "new_device_names": {
+        "title": "Name your new devices"
+      },
+      "rename_device": {
+        "title": "Rename or re-point a device",
+        "description": "Schedules in your plans follow the device, so you can swap the underlying entity without editing any plan.",
+        "data": {
+          "id": "Device",
+          "name": "New name",
+          "entity_id": "Entity"
+        }
+      },
+      "remove_device": {
+        "title": "Remove devices",
+        "description": "Removed devices are no longer switched. Their schedules stay in your plans but are ignored.",
+        "data": {
+          "devices": "Devices to remove"
+        }
+      }
+    },
+    "error": {
+      "no_new_devices": "All selected devices are already part of this system."
+    },
+    "abort": {
+      "no_devices": "This system has no devices."
+    }
+  },
+  "config_subentries": {
+    "plan": {
+      "entry_type": "Grow plan",
+      "initiate_flow": {
+        "user": "Add grow plan"
+      },
+      "step": {
+        "user": {
+          "title": "New grow plan",
+          "data": {
+            "name": "Plan name",
+            "preset": "Start from"
+          },
+          "data_description": {
+            "preset": "Presets fill in stages and device schedules. You can change everything afterwards."
+          }
+        },
+        "map_roles": {
+          "title": "Match the preset to your devices",
+          "description": "The preset has schedules for these roles. Pick which of your devices plays each one, or \"—\" to leave it out.",
+          "data": {
+            "center_lights": "Center lights",
+            "side_lights": "Side lights",
+            "water_pump": "Water pump"
+          }
+        },
+        "menu": {
+          "title": "{name}",
+          "description": "{summary}",
+          "menu_options": {
+            "details": "Name, target pH and notes",
+            "add_stage": "Add a stage",
+            "edit_stage": "Edit a stage",
+            "tasks": "Edit tasks",
+            "move_stage": "Reorder stages",
+            "remove_stage": "Remove a stage",
+            "save": "Save plan"
+          }
+        },
+        "details": {
+          "title": "Plan details",
+          "data": {
+            "name": "Plan name",
+            "target_ph": "Target pH",
+            "notes": "Notes"
+          },
+          "data_description": {
+            "target_ph": "Optional. Used to flag readings that drift out of range."
+          }
+        },
+        "add_stage": {
+          "title": "Add a stage",
+          "data": {
+            "name": "Stage name",
+            "stage_type": "Stage type",
+            "days": "Estimated days",
+            "target_ec": "Target EC",
+            "outcome": "Expected outcome"
+          },
+          "data_description": {
+            "days": "Used for progress and the expected harvest date.",
+            "target_ec": "Optional. Used to flag readings that drift out of range.",
+            "outcome": "What the plants should look like by the end of this stage."
+          }
+        },
+        "edit_stage": {
+          "title": "Edit a stage",
+          "data": {
+            "stage": "Stage"
+          }
+        },
+        "stage_basics": {
+          "title": "Edit {stage}",
+          "data": {
+            "name": "Stage name",
+            "stage_type": "Stage type",
+            "days": "Estimated days",
+            "target_ec": "Target EC",
+            "outcome": "Expected outcome"
+          },
+          "data_description": {
+            "days": "Used for progress and the expected harvest date.",
+            "target_ec": "Optional. Used to flag readings that drift out of range.",
+            "outcome": "What the plants should look like by the end of this stage."
+          }
+        },
+        "stage_schedule": {
+          "title": "{stage}: {device} ({position}/{count})",
+          "description": "How should **{device}** (`{entity_id}`) behave during this stage?\n\n- **Time window** uses on/off time (windows may cross midnight).\n- **Interval** uses on-for / every, repeating from midnight.\n- **Not managed** leaves the device alone.",
+          "data": {
+            "mode": "Mode",
+            "on_time": "On at",
+            "off_time": "Off at",
+            "interval_on": "On for",
+            "interval_every": "Every"
+          }
+        },
+        "move_stage": {
+          "title": "Reorder stages",
+          "data": {
+            "stage": "Stage",
+            "position": "New position"
+          }
+        },
+        "remove_stage": {
+          "title": "Remove a stage",
+          "data": {
+            "stage": "Stage"
+          }
+        },
+        "tasks": {
+          "title": "Edit tasks",
+          "data": {
+            "stage": "Stage"
+          }
+        },
+        "task_menu": {
+          "title": "Tasks: {stage}",
+          "description": "{tasks}",
+          "menu_options": {
+            "add_task": "Add a task",
+            "edit_task": "Edit a task",
+            "remove_task": "Remove tasks",
+            "menu": "Back to plan"
+          }
+        },
+        "add_task": {
+          "title": "Add a task to {stage}",
+          "data": {
+            "day": "Day of stage",
+            "task_type": "Type",
+            "title": "Title",
+            "note": "Note"
+          },
+          "data_description": {
+            "day": "Day 1 is the day the stage starts."
+          }
+        },
+        "edit_task": {
+          "title": "Edit a task",
+          "data": {
+            "task": "Task"
+          }
+        },
+        "task_details": {
+          "title": "Edit task",
+          "data": {
+            "day": "Day of stage",
+            "task_type": "Type",
+            "title": "Title",
+            "note": "Note"
+          },
+          "data_description": {
+            "day": "Day 1 is the day the stage starts."
+          }
+        },
+        "remove_task": {
+          "title": "Remove tasks",
+          "data": {
+            "tasks": "Tasks"
+          }
+        }
+      },
+      "error": {
+        "name_taken": "Another plan already uses this name.",
+        "window_required": "Set both an on time and an off time.",
+        "window_empty": "On and off times must differ.",
+        "interval_required": "Set both how long the device runs and how often.",
+        "interval_too_long": "\"On for\" must be shorter than \"Every\"."
+      },
+      "abort": {
+        "reconfigure_successful": "Plan saved."
+      }
+    }
+  },
+  "selector": {
+    "preset": {
+      "options": {
+        "blank": "Blank plan",
+        "lettuce": "Lettuce (3 stages, 35 days)",
+        "leafy_greens": "Leafy greens (3 stages, 104 days)"
+      }
+    },
+    "stage_type": {
+      "options": {
+        "germination": "Germination",
+        "sprouting": "Sprouting",
+        "seedling": "Seedling",
+        "vegetative": "Vegetative",
+        "flowering": "Flowering",
+        "fruiting": "Fruiting",
+        "ripening": "Ripening",
+        "harvest": "Harvest",
+        "other": "Other"
+      }
+    },
+    "schedule_mode": {
+      "options": {
+        "manual": "Not managed",
+        "off": "Off",
+        "always_on": "Always on",
+        "time_window": "Time window",
+        "interval": "Interval"
+      }
+    },
+    "task_type": {
+      "options": {
+        "reminder": "Reminder",
+        "plant_training": "Plant training",
+        "trimming": "Trimming",
+        "top_up": "Top up water",
+        "flush_refill": "Flush and refill",
+        "add_nutrients": "Add nutrients",
+        "take_picture": "Take a picture",
+        "harvest": "Harvest"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "ph_out_of_range": { "name": "pH out of range" },
+      "ec_out_of_range": { "name": "EC out of range" },
+      "reading_overdue": { "name": "Water reading overdue" },
+      "scheduled_on": { "name": "{device} scheduled" }
+    },
+    "button": {
+      "advance_stage": { "name": "Next stage" },
+      "previous_stage": { "name": "Previous stage" },
+      "restart_stage": { "name": "Restart stage" },
+      "sync_devices": { "name": "Sync devices" },
+      "log_reading": { "name": "Water checked" }
+    },
+    "number": {
+      "measured_ph": { "name": "Measured pH" },
+      "measured_ec": { "name": "Measured EC" }
+    },
+    "select": {
+      "active_plan": {
+        "name": "Plan",
+        "state": { "none": "No grow running" }
+      },
+      "current_stage": { "name": "Stage" }
+    },
+    "sensor": {
+      "plan": { "name": "Active plan" },
+      "stage": { "name": "Current stage" },
+      "stage_day": { "name": "Stage day" },
+      "stage_days_remaining": { "name": "Stage days remaining" },
+      "stage_progress": { "name": "Stage progress" },
+      "grow_day": { "name": "Grow day" },
+      "grow_started": { "name": "Grow started" },
+      "expected_harvest": { "name": "Expected end" },
+      "target_ph": { "name": "Target pH" },
+      "target_ec": { "name": "Target EC" },
+      "tasks_due": { "name": "Tasks due" },
+      "next_task": { "name": "Next task" }
+    },
+    "switch": {
+      "schedule_control": { "name": "Schedule control" }
+    },
+    "todo": {
+      "tasks": { "name": "Tasks" }
+    }
+  },
+  "services": {
+    "start_grow": {
+      "name": "Start grow",
+      "description": "Starts a grow plan, optionally at a later stage or backdated.",
+      "fields": {
+        "config_entry_id": { "name": "Grow system", "description": "Optional when you have only one grow system." },
+        "plan": { "name": "Plan", "description": "Plan name." },
+        "stage": { "name": "Stage", "description": "Stage name or number to start at. Defaults to the first stage." },
+        "start_date": { "name": "Start date", "description": "Date the grow (and the starting stage) began. Defaults to today." }
+      }
+    },
+    "end_grow": {
+      "name": "End grow",
+      "description": "Stops the running grow. Devices are left as they are.",
+      "fields": {
+        "config_entry_id": { "name": "Grow system", "description": "Optional when you have only one grow system." }
+      }
+    },
+    "set_stage": {
+      "name": "Set stage",
+      "description": "Jumps to a stage of the running plan.",
+      "fields": {
+        "config_entry_id": { "name": "Grow system", "description": "Optional when you have only one grow system." },
+        "stage": { "name": "Stage", "description": "Stage name or number." },
+        "start_date": { "name": "Start date", "description": "Date the stage began. Defaults to today." }
+      }
+    },
+    "advance_stage": {
+      "name": "Advance stage",
+      "description": "Moves the running grow to its next stage.",
+      "fields": {
+        "config_entry_id": { "name": "Grow system", "description": "Optional when you have only one grow system." }
+      }
+    },
+    "log_reading": {
+      "name": "Log water reading",
+      "description": "Records a manual pH and/or EC reading.",
+      "fields": {
+        "config_entry_id": { "name": "Grow system", "description": "Optional when you have only one grow system." },
+        "ph": { "name": "pH", "description": "Measured pH." },
+        "ec": { "name": "EC", "description": "Measured EC in mS/cm." }
+      }
+    },
+    "sync_devices": {
+      "name": "Sync devices",
+      "description": "Forces every managed device to match the current schedule, undoing manual overrides.",
+      "fields": {
+        "config_entry_id": { "name": "Grow system", "description": "Optional when you have only one grow system." }
+      }
+    }
+  },
+  "exceptions": {
+    "unknown_plan": { "message": "No plan named \"{plan}\"." },
+    "unknown_stage": { "message": "Plan \"{plan}\" has no stage \"{stage}\"." },
+    "plan_has_no_stages": { "message": "Plan \"{plan}\" has no stages." },
+    "no_active_grow": { "message": "No grow is running." },
+    "last_stage": { "message": "Already at the last stage." },
+    "first_stage": { "message": "Already at the first stage." },
+    "unknown_system": { "message": "That grow system is not loaded." },
+    "system_required": { "message": "You have more than one grow system; choose which one." },
+    "unknown_task": { "message": "That task no longer exists." },
+    "plan_task_readonly": { "message": "Plan tasks can only be checked off or removed. Edit the plan to change them." }
+  }
+}

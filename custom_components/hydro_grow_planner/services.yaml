@@ -1,0 +1,78 @@
+start_grow:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: hydro_grow_planner
+    plan:
+      required: true
+      example: Lettuce
+      selector:
+        text:
+    stage:
+      example: "2"
+      selector:
+        text:
+    start_date:
+      selector:
+        date:
+
+end_grow:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: hydro_grow_planner
+
+set_stage:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: hydro_grow_planner
+    stage:
+      required: true
+      example: Seedling
+      selector:
+        text:
+    start_date:
+      selector:
+        date:
+
+advance_stage:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: hydro_grow_planner
+
+log_reading:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: hydro_grow_planner
+    ph:
+      example: 6.1
+      selector:
+        number:
+          min: 0
+          max: 14
+          step: 0.1
+          mode: box
+    ec:
+      example: 1.2
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 0.1
+          mode: box
+          unit_of_measurement: mS/cm
+
+sync_devices:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: hydro_grow_planner
