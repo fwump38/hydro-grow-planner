@@ -19,6 +19,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .entity import GrowEntity
 from .manager import GrowConfigEntry, GrowManager
+from .models import format_range
 from .schedule import describe
 
 
@@ -41,9 +42,10 @@ def _stage_attrs(m: GrowManager) -> dict[str, Any]:
         "stage_type": stage.stage_type,
         "estimated_days": stage.days,
         "expected_outcome": stage.outcome,
-        "target_ec": stage.target_ec,
+        "ec_range": format_range(stage.ec_min, stage.ec_max),
+        "night_lighting": m.night_lighting,
         "stage_started": m.stage_started.isoformat() if m.stage_started else None,
-        "schedules": {d.name: describe(stage.schedule_for(d.id)) for d in m.devices},
+        "schedules": {d.name: describe(sched) for d in m.devices if (sched := m.schedule_for(d))},
         "stages": [s.name for s in plan.stages],
     }
 
@@ -75,7 +77,10 @@ SENSORS: tuple[GrowSensorDescription, ...] = (
         translation_key="plan",
         value_fn=lambda m: m.active_plan.name if m.is_active and m.active_plan else None,
         attrs_fn=lambda m: (
-            {"notes": m.active_plan.notes, "target_ph": m.active_plan.target_ph}
+            {
+                "notes": m.active_plan.notes,
+                "ph_range": format_range(m.active_plan.ph_min, m.active_plan.ph_max),
+            }
             if m.is_active and m.active_plan
             else {}
         ),
@@ -123,17 +128,30 @@ SENSORS: tuple[GrowSensorDescription, ...] = (
         value_fn=lambda m: m.expected_harvest,
     ),
     GrowSensorDescription(
-        key="target_ph",
-        translation_key="target_ph",
+        key="ph_min",
+        translation_key="ph_min",
         device_class=SensorDeviceClass.PH,
-        value_fn=lambda m: m.target_ph,
+        value_fn=lambda m: m.ph_range[0],
     ),
     GrowSensorDescription(
-        key="target_ec",
-        translation_key="target_ec",
+        key="ph_max",
+        translation_key="ph_max",
+        device_class=SensorDeviceClass.PH,
+        value_fn=lambda m: m.ph_range[1],
+    ),
+    GrowSensorDescription(
+        key="ec_min",
+        translation_key="ec_min",
         native_unit_of_measurement="mS/cm",
         suggested_display_precision=1,
-        value_fn=lambda m: m.target_ec,
+        value_fn=lambda m: m.ec_range[0],
+    ),
+    GrowSensorDescription(
+        key="ec_max",
+        translation_key="ec_max",
+        native_unit_of_measurement="mS/cm",
+        suggested_display_precision=1,
+        value_fn=lambda m: m.ec_range[1],
     ),
     GrowSensorDescription(
         key="tasks_due",

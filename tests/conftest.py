@@ -17,14 +17,30 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.hydro_grow_planner.const import DOMAIN, SUBENTRY_TYPE_PLAN
 
 DEVICES = [
-    {"id": "dev_side", "name": "Side lights", "entity_id": "input_boolean.side_lights"},
-    {"id": "dev_center", "name": "Center lights", "entity_id": "input_boolean.center_lights"},
-    {"id": "dev_pump", "name": "Water pump", "entity_id": "input_boolean.water_pump"},
+    {
+        "id": "dev_side",
+        "name": "Side lights",
+        "entity_id": "input_boolean.side_lights",
+        "light": True,
+    },
+    {
+        "id": "dev_center",
+        "name": "Center lights",
+        "entity_id": "input_boolean.center_lights",
+        "light": True,
+    },
+    {
+        "id": "dev_pump",
+        "name": "Water pump",
+        "entity_id": "input_boolean.water_pump",
+        "light": False,
+    },
 ]
 
 PLAN = {
     "name": "Lettuce",
-    "target_ph": 6.0,
+    "ph_min": 5.8,
+    "ph_max": 6.2,
     "notes": "",
     "stages": [
         {
@@ -33,15 +49,29 @@ PLAN = {
             "stage_type": "sprouting",
             "days": 7,
             "outcome": "Sprouts",
-            "target_ec": 0.8,
+            "ec_min": 0.6,
+            "ec_max": 1.0,
             "schedules": {
                 "dev_side": {"mode": "time_window", "on_time": "11:30:00", "off_time": "16:30:00"},
                 "dev_center": {"mode": "off"},
                 "dev_pump": {"mode": "interval", "interval_on": 900, "interval_every": 10800},
             },
             "tasks": [
-                {"id": "t1", "day": 1, "task_type": "reminder", "title": "Plant seeds", "note": ""},
-                {"id": "t2", "day": 3, "task_type": "top_up", "title": "Top up", "note": "Tap"},
+                {
+                    "id": "t1",
+                    "days": [1],
+                    "task_type": "reminder",
+                    "title": "Plant seeds",
+                    "note": "",
+                },
+                {
+                    "id": "t2",
+                    "days": [3],
+                    "every": 2,
+                    "task_type": "top_up",
+                    "title": "Top up",
+                    "note": "Tap",
+                },
             ],
         },
         {
@@ -50,7 +80,8 @@ PLAN = {
             "stage_type": "seedling",
             "days": 7,
             "outcome": "",
-            "target_ec": 1.2,
+            "ec_min": 1.0,
+            "ec_max": 1.4,
             "schedules": {
                 "dev_side": {"mode": "off"},
                 "dev_center": {
@@ -89,7 +120,6 @@ def mock_entry(plan_data: dict[str, Any]) -> MockConfigEntry:
             "ec_tolerance": 0.3,
             "reading_interval_days": 3,
             "reminder_time": "08:00:00",
-            "auto_advance": False,
         },
         subentries_data=[
             ConfigSubentryData(

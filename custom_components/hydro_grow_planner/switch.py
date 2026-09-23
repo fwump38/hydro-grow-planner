@@ -19,7 +19,8 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the switch."""
-    async_add_entities([ScheduleControlSwitch(entry.runtime_data)])
+    manager = entry.runtime_data
+    async_add_entities([ScheduleControlSwitch(manager), NightLightingSwitch(manager)])
 
 
 class ScheduleControlSwitch(GrowEntity, SwitchEntity):
@@ -44,3 +45,26 @@ class ScheduleControlSwitch(GrowEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable device control."""
         await self.manager.async_set_schedule_enabled(False)
+
+
+class NightLightingSwitch(GrowEntity, SwitchEntity):
+    """Run the lights at night: every light's time window shifts by 12 hours."""
+
+    _attr_translation_key = "night_lighting"
+
+    def __init__(self, manager: GrowManager) -> None:
+        """Initialize."""
+        super().__init__(manager, "night_lighting")
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether night lighting is on."""
+        return self.manager.night_lighting
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Shift light windows to the night and sync."""
+        await self.manager.async_set_night_lighting(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Return light windows to the day and sync."""
+        await self.manager.async_set_night_lighting(False)

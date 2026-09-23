@@ -6,6 +6,7 @@ Home Assistant dependencies.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, time, timedelta
 
 from .const import (
@@ -33,6 +34,22 @@ def _at(day_start: datetime, value: str) -> datetime:
 
 def _day_start(now: datetime) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _shift_clock(value: str, hours: int) -> str:
+    t = parse_time(value)
+    return f"{(t.hour + hours) % 24:02d}:{t.minute:02d}:{t.second:02d}"
+
+
+def shift_for_night(schedule: DeviceSchedule) -> DeviceSchedule:
+    """Move a light's time window by 12 hours (other modes are unchanged)."""
+    if schedule.mode != MODE_TIME_WINDOW:
+        return schedule
+    return replace(
+        schedule,
+        on_time=_shift_clock(schedule.on_time, 12),
+        off_time=_shift_clock(schedule.off_time, 12),
+    )
 
 
 def desired_state(schedule: DeviceSchedule, now: datetime) -> bool | None:

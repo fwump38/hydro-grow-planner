@@ -17,12 +17,14 @@ import uuid
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_UNIT_OF_MEASUREMENT,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    UnitOfTemperature,
 )
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -35,22 +37,20 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
-    CONF_AUTO_ADVANCE,
     CONF_DEVICE_ID,
+    CONF_DEVICE_LIGHT,
     CONF_DEVICE_NAME,
     CONF_DEVICES,
     CONF_EC_SENSOR,
-    CONF_EC_TOLERANCE,
     CONF_ENTITY_ID,
+    CONF_HUMIDITY_SENSOR,
     CONF_PH_SENSOR,
-    CONF_PH_TOLERANCE,
     CONF_READING_INTERVAL_DAYS,
     CONF_REMINDER_TIME,
-    DEFAULT_AUTO_ADVANCE,
-    DEFAULT_EC_TOLERANCE,
-    DEFAULT_PH_TOLERANCE,
+    CONF_TEMPERATURE_SENSOR,
     DEFAULT_READING_INTERVAL_DAYS,
     DEFAULT_REMINDER_TIME,
     DOMAIN,
@@ -60,12 +60,22 @@ from .const import (
     STORAGE_VERSION,
     SUBENTRY_TYPE_PLAN,
 )
-from .models import Plan, Stage, Task
-from .schedule import desired_state, next_transition, parse_time
+from .models import DeviceSchedule, Plan, Stage, Task, out_of_range
+from .schedule import desired_state, next_transition, parse_time, shift_for_night
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def guess_is_light(entity_id: str, name: str) -> bool:
+    """Guess whether a device is a grow light (for night lighting)."""
+    return entity_id.startswith("light.") or "light" in f"{entity_id} {name}".lower()
+
+
 SAFETY_INTERVAL = timedelta(minutes=5)
+# What describes one stage run; saved to history when a stage is left.
+STAGE_RUN_KEYS = ("stage_id", "stage_started", "stage_run", "completed", "dismissed")
+MAX_HISTORY = 20
+STAGE_CHECK_ID = "stage_check"
 SAVE_DELAY = 2
 
 type GrowConfigEntry = ConfigEntry[GrowManager]
@@ -78,6 +88,7 @@ class GrowDevice:
     id: str
     name: str
     entity_id: str
+    light: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +97,7 @@ class TaskItem:
 
     uid: str
     task: Task
+    day: int
     due: date
     completed: bool
 
@@ -98,7 +110,12 @@ class GrowManager:
         self.hass = hass
         self.entry = entry
         self.devices = [
-            GrowDevice(d[CONF_DEVICE_ID], d[CONF_DEVICE_NAME], d[CONF_ENTITY_ID])
+            GrowDevice(
+                d[CONF_DEVICE_ID],
+                d[CONF_DEVICE_NAME],
+                d[CONF_ENTITY_ID],
+                d.get(CONF_DEVICE_LIGHT, guess_is_light(d[CONF_ENTITY_ID], d[CONF_DEVICE_NAME])),
+            )
             for d in entry.data.get(CONF_DEVICES, [])
         ]
         self.plans: dict[str, Plan] = {
@@ -158,8 +175,13 @@ class GrowManager:
         )
         sensors = [
             s
-            for s in (self.entry.data.get(CONF_PH_SENSOR), self.entry.data.get(CONF_EC_SENSOR))
-            if s
+            for key in (
+                CONF_PH_SENSOR,
+                CONF_EC_SENSOR,
+                CONF_TEMPERATURE_SENSOR,
+                CONF_HUMIDITY_SENSOR,
+            )
+            if (s := self.entry.data.get(key))
         ]
         if sensors:
             self._unsubs.append(
@@ -169,7 +191,6 @@ class GrowManager:
 
     async def _async_started(self, _hass: HomeAssistant) -> None:
         """Run once HA is up (or immediately on reload)."""
-        await self._async_maybe_auto_advance()
         await self.async_sync(force=True)
 
     async def async_unload(self) -> None:
@@ -290,12 +311,23 @@ class GrowManager:
         """Return True when the integration may switch devices."""
         return bool(self._state.get("schedule_enabled", True))
 
-    def desired(self, device_id: str) -> bool | None:
-        """Return the desired state of a device right now (None = unmanaged)."""
+    @property
+    def night_lighting(self) -> bool:
+        """Return True when light windows are shifted by 12 hours."""
+        return bool(self._state.get("night_lighting", False))
+
+    def schedule_for(self, device: GrowDevice) -> DeviceSchedule | None:
+        """Return the device's effective schedule in the current stage."""
         stage = self.active_stage
         if stage is None:
             return None
-        return desired_state(stage.schedule_for(device_id), dt_util.now())
+        schedule = stage.schedule_for(device.id)
+        return shift_for_night(schedule) if self.night_lighting and device.light else schedule
+
+    def desired(self, device: GrowDevice) -> bool | None:
+        """Return the desired state of a device right now (None = unmanaged)."""
+        schedule = self.schedule_for(device)
+        return desired_state(schedule, dt_util.now()) if schedule else None
 
     # -- water ---------------------------------------------------------
 
@@ -336,16 +368,16 @@ class GrowManager:
         return self._state.get("ec")
 
     @property
-    def target_ph(self) -> float | None:
-        """Return the plan's target pH."""
+    def ph_range(self) -> tuple[float | None, float | None]:
+        """Return the plan's pH range."""
         plan = self.active_plan
-        return plan.target_ph if plan and self.is_active else None
+        return (plan.ph_min, plan.ph_max) if plan and self.is_active else (None, None)
 
     @property
-    def target_ec(self) -> float | None:
-        """Return the stage's target EC."""
+    def ec_range(self) -> tuple[float | None, float | None]:
+        """Return the stage's EC range."""
         stage = self.active_stage
-        return stage.target_ec if stage else None
+        return (stage.ec_min, stage.ec_max) if stage else (None, None)
 
     @property
     def last_reading(self) -> datetime | None:
@@ -353,30 +385,72 @@ class GrowManager:
         value = self._state.get("last_reading")
         return dt_util.parse_datetime(value) if value else None
 
-    def _out_of_range(
-        self, measured: float | None, target: float | None, tolerance: float
-    ) -> bool | None:
-        if measured is None or target is None:
-            return None
-        return abs(measured - target) > tolerance
-
     @property
     def ph_out_of_range(self) -> bool | None:
-        """Return whether pH is outside target ± tolerance."""
-        return self._out_of_range(
-            self.measured_ph,
-            self.target_ph,
-            self.option(CONF_PH_TOLERANCE, DEFAULT_PH_TOLERANCE),
-        )
+        """Return whether pH is outside the plan's range."""
+        return out_of_range(self.measured_ph, *self.ph_range)
 
     @property
     def ec_out_of_range(self) -> bool | None:
-        """Return whether EC is outside target ± tolerance."""
-        return self._out_of_range(
-            self.measured_ec,
-            self.target_ec,
-            self.option(CONF_EC_TOLERANCE, DEFAULT_EC_TOLERANCE),
-        )
+        """Return whether EC is outside the stage's range."""
+        return out_of_range(self.measured_ec, *self.ec_range)
+
+    # -- climate -------------------------------------------------------
+
+    @property
+    def has_temperature_sensor(self) -> bool:
+        """Return True if a room temperature sensor is configured."""
+        return bool(self.entry.data.get(CONF_TEMPERATURE_SENSOR))
+
+    @property
+    def has_humidity_sensor(self) -> bool:
+        """Return True if a room humidity sensor is configured."""
+        return bool(self.entry.data.get(CONF_HUMIDITY_SENSOR))
+
+    @property
+    def temperature_range(self) -> tuple[float | None, float | None, str]:
+        """Return the plan's temperature range and its unit."""
+        plan = self.active_plan
+        if plan is None or not self.is_active:
+            return None, None, UnitOfTemperature.CELSIUS
+        return plan.temp_min, plan.temp_max, plan.temp_unit
+
+    @property
+    def humidity_range(self) -> tuple[float | None, float | None]:
+        """Return the plan's humidity range (%)."""
+        plan = self.active_plan
+        if plan is None or not self.is_active:
+            return None, None
+        return plan.humidity_min, plan.humidity_max
+
+    @property
+    def temperature(self) -> float | None:
+        """Return the room temperature in the plan's unit."""
+        value = self._sensor_value(CONF_TEMPERATURE_SENSOR)
+        if value is None:
+            return None
+        state = self.hass.states.get(self.entry.data[CONF_TEMPERATURE_SENSOR])
+        source = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT) if state else None
+        target = self.temperature_range[2]
+        if source in TemperatureConverter.VALID_UNITS and source != target:
+            value = TemperatureConverter.convert(value, source, target)
+        return round(value, 1)
+
+    @property
+    def humidity(self) -> float | None:
+        """Return the room humidity (%)."""
+        return self._sensor_value(CONF_HUMIDITY_SENSOR)
+
+    @property
+    def temperature_out_of_range(self) -> bool | None:
+        """Return whether the room temperature is outside the plan's range."""
+        low, high, _ = self.temperature_range
+        return out_of_range(self.temperature, low, high)
+
+    @property
+    def humidity_out_of_range(self) -> bool | None:
+        """Return whether the room humidity is outside the plan's range."""
+        return out_of_range(self.humidity, *self.humidity_range)
 
     @property
     def reading_overdue(self) -> bool | None:
@@ -408,19 +482,40 @@ class GrowManager:
         completed = set(self._state["completed"])
         dismissed = set(self._state["dismissed"])
         items = []
-        for task in stage.tasks:
-            uid = f"task_{run}_{task.id}"
-            if uid in dismissed:
-                continue
-            items.append(
-                TaskItem(
-                    uid=uid,
-                    task=task,
-                    due=started + timedelta(days=task.day - 1),
-                    completed=uid in completed,
+        for task in (*stage.tasks, self._stage_check_task(stage)):
+            for day in task.occurrences(stage.days):
+                uid = f"task_{run}_{task.id}_{day}"
+                if uid in dismissed:
+                    continue
+                items.append(
+                    TaskItem(
+                        uid=uid,
+                        task=task,
+                        day=day,
+                        due=started + timedelta(days=day - 1),
+                        completed=uid in completed,
+                    )
                 )
-            )
-        return items
+        return sorted(items, key=lambda item: item.due)
+
+    def _stage_check_task(self, stage: Stage) -> Task:
+        """A reminder on the stage's last estimated day to decide on moving on.
+
+        Stages only ever change by hand; this just prompts the check (like the
+        Elfsys app's stage-change check), with the expected outcome as its note.
+        """
+        plan, index = self.active_plan, self.stage_index or 0
+        nxt = plan.stages[index + 1] if plan and index + 1 < len(plan.stages) else None
+        title = f"Check if ready for {nxt.name}" if nxt else "Check if ready to finish the grow"
+        action = f"If so, move on with Next stage ({nxt.name})." if nxt else "If so, end the grow."
+        outcome = f"Expected by now: {stage.outcome}" if stage.outcome else ""
+        return Task(
+            id=STAGE_CHECK_ID,
+            task_type="reminder",
+            title=title,
+            days=(stage.days,),
+            note="\n\n".join(part for part in (outcome, action) if part),
+        )
 
     @property
     def custom_items(self) -> list[dict[str, Any]]:
@@ -469,6 +564,11 @@ class GrowManager:
 
     @callback
     def _enter_stage(self, stage: Stage, started: date) -> None:
+        if self._state.get("stage_id"):
+            # Remember the stage being left so going back can undo the move.
+            history = self._state.setdefault("history", [])
+            history.append({key: self._state.get(key) for key in STAGE_RUN_KEYS})
+            del history[:-MAX_HISTORY]
         self._state["stage_id"] = stage.id
         self._state["stage_started"] = started.isoformat()
         self._state["stage_run"] = uuid.uuid4().hex[:8]
@@ -479,6 +579,7 @@ class GrowManager:
     def _clear_grow(self) -> None:
         for key in ("plan_id", "stage_id", "stage_started", "grow_started", "stage_run"):
             self._state.pop(key, None)
+        self._state["history"] = []
         self._state["completed"] = []
         self._state["dismissed"] = []
         self._state["last_desired"] = {}
@@ -488,6 +589,7 @@ class GrowManager:
         plan_ref: str,
         stage_ref: str | int | None = None,
         start_date: date | None = None,
+        night_lighting: bool | None = None,
     ) -> None:
         """Start a plan, optionally at a later stage or backdated."""
         plan = self._plan_or_raise(plan_ref)
@@ -499,7 +601,10 @@ class GrowManager:
             )
         stage = plan.stages[0] if stage_ref is None else self._stage_or_raise(plan, stage_ref)
         started = start_date or dt_util.now().date()
+        self._clear_grow()
         self._state["plan_id"] = plan.id
+        if night_lighting is not None:
+            self._state["night_lighting"] = night_lighting
         self._state["grow_started"] = started.isoformat()
         self._enter_stage(stage, started)
         await self._async_after_stage_change(previous=None)
@@ -521,7 +626,13 @@ class GrowManager:
         plan = self._require_active()
         previous = self.active_stage
         stage = self._stage_or_raise(plan, stage_ref)
-        self._enter_stage(stage, start_date or dt_util.now().date())
+        history = self._state.get("history", [])
+        if start_date is None and history and history[-1]["stage_id"] == stage.id:
+            # Going back to the stage we just left: undo the move instead of
+            # restarting it, keeping its start date and checked-off tasks.
+            self._state.update(history.pop())
+        else:
+            self._enter_stage(stage, start_date or dt_util.now().date())
         await self._async_after_stage_change(previous)
 
     async def async_advance_stage(self) -> None:
@@ -533,7 +644,7 @@ class GrowManager:
         await self.async_set_stage(plan.stages[index + 1].id)
 
     async def async_previous_stage(self) -> None:
-        """Move back to the previous stage."""
+        """Move back to the previous stage, undoing the last advance when possible."""
         plan = self._require_active()
         index = self.stage_index or 0
         if index == 0:
@@ -572,6 +683,12 @@ class GrowManager:
                 "expected_outcome": stage.outcome,
             },
         )
+        await self.async_sync(force=True)
+
+    async def async_set_night_lighting(self, enabled: bool) -> None:
+        """Shift light windows by 12 hours (or back) and re-sync."""
+        self._state["night_lighting"] = enabled
+        self._save()
         await self.async_sync(force=True)
 
     async def async_set_schedule_enabled(self, enabled: bool) -> None:
@@ -643,7 +760,7 @@ class GrowManager:
         last: dict[str, bool] = self._state["last_desired"]
         changed = False
         for device in self.devices:
-            want = self.desired(device.id)
+            want = self.desired(device)
             if want is None:
                 if last.pop(device.id, None) is not None:
                     changed = True
@@ -689,7 +806,8 @@ class GrowManager:
         upcoming = [
             t
             for device in self.devices
-            if (t := next_transition(stage.schedule_for(device.id), now)) is not None
+            if (schedule := self.schedule_for(device)) is not None
+            and (t := next_transition(schedule, now)) is not None
         ]
         if upcoming:
             self._transition_unsub = async_track_point_in_time(
@@ -705,19 +823,8 @@ class GrowManager:
         await self.async_sync()
 
     async def _async_midnight_tick(self, _now: datetime) -> None:
-        await self._async_maybe_auto_advance()
+        # Day counters and due tasks roll over. Stages never change on their own.
         self._notify()
-
-    async def _async_maybe_auto_advance(self) -> None:
-        if not self.option(CONF_AUTO_ADVANCE, DEFAULT_AUTO_ADVANCE):
-            return
-        plan, stage, day = self.active_plan, self.active_stage, self.stage_day
-        if plan is None or stage is None or day is None:
-            return
-        index = self.stage_index or 0
-        if day > stage.days and index + 1 < len(plan.stages):
-            started = (self.stage_started or dt_util.now().date()) + timedelta(days=stage.days)
-            await self.async_set_stage(plan.stages[index + 1].id, start_date=started)
 
     async def _async_reminder_tick(self, _now: datetime) -> None:
         due = self.tasks_due()
@@ -737,6 +844,7 @@ class GrowManager:
                         "title": item.task.title,
                         "task_type": item.task.task_type,
                         "note": item.task.note,
+                        "method": item.task.method,
                         "due": item.due.isoformat(),
                         "overdue": item.due < today,
                     }

@@ -1,57 +1,144 @@
 {
   "entity": {
     "binary_sensor": {
-      "ph_out_of_range": { "default": "mdi:ph" },
-      "ec_out_of_range": { "default": "mdi:flash-triangle-outline" },
-      "reading_overdue": { "default": "mdi:water-check-outline" },
+      "ph_out_of_range": {
+        "default": "mdi:ph"
+      },
+      "ec_out_of_range": {
+        "default": "mdi:flash-triangle-outline"
+      },
+      "reading_overdue": {
+        "default": "mdi:water-check-outline"
+      },
       "scheduled_on": {
         "default": "mdi:calendar-clock",
-        "state": { "on": "mdi:calendar-check", "off": "mdi:calendar-remove" }
+        "state": {
+          "on": "mdi:calendar-check",
+          "off": "mdi:calendar-remove"
+        }
+      },
+      "temperature_out_of_range": {
+        "default": "mdi:thermometer-alert"
+      },
+      "humidity_out_of_range": {
+        "default": "mdi:water-percent-alert"
       }
     },
     "button": {
-      "advance_stage": { "default": "mdi:skip-next" },
-      "previous_stage": { "default": "mdi:skip-previous" },
-      "restart_stage": { "default": "mdi:restart" },
-      "sync_devices": { "default": "mdi:sync" },
-      "log_reading": { "default": "mdi:water-check" }
+      "advance_stage": {
+        "default": "mdi:skip-next"
+      },
+      "previous_stage": {
+        "default": "mdi:skip-previous"
+      },
+      "restart_stage": {
+        "default": "mdi:restart"
+      },
+      "sync_devices": {
+        "default": "mdi:sync"
+      },
+      "log_reading": {
+        "default": "mdi:water-check"
+      }
     },
     "number": {
-      "measured_ec": { "default": "mdi:flash-outline" }
+      "measured_ec": {
+        "default": "mdi:flash-outline"
+      }
     },
     "select": {
-      "active_plan": { "default": "mdi:sprout" },
-      "current_stage": { "default": "mdi:stairs" }
+      "active_plan": {
+        "default": "mdi:sprout"
+      },
+      "current_stage": {
+        "default": "mdi:stairs"
+      }
     },
     "sensor": {
-      "plan": { "default": "mdi:sprout" },
-      "stage": { "default": "mdi:stairs" },
-      "stage_day": { "default": "mdi:calendar-today" },
-      "stage_days_remaining": { "default": "mdi:calendar-end" },
-      "stage_progress": { "default": "mdi:progress-clock" },
-      "grow_day": { "default": "mdi:calendar-range" },
-      "grow_started": { "default": "mdi:calendar-start" },
-      "expected_harvest": { "default": "mdi:basket-outline" },
-      "target_ec": { "default": "mdi:flash-outline" },
-      "tasks_due": { "default": "mdi:clipboard-check-outline" },
-      "next_task": { "default": "mdi:clipboard-clock-outline" }
+      "plan": {
+        "default": "mdi:sprout"
+      },
+      "stage": {
+        "default": "mdi:stairs"
+      },
+      "stage_day": {
+        "default": "mdi:calendar-today"
+      },
+      "stage_days_remaining": {
+        "default": "mdi:calendar-end"
+      },
+      "stage_progress": {
+        "default": "mdi:progress-clock"
+      },
+      "grow_day": {
+        "default": "mdi:calendar-range"
+      },
+      "grow_started": {
+        "default": "mdi:calendar-start"
+      },
+      "expected_harvest": {
+        "default": "mdi:basket-outline"
+      },
+      "tasks_due": {
+        "default": "mdi:clipboard-check-outline"
+      },
+      "next_task": {
+        "default": "mdi:clipboard-clock-outline"
+      },
+      "ph_min": {
+        "default": "mdi:ph"
+      },
+      "ph_max": {
+        "default": "mdi:ph"
+      },
+      "ec_min": {
+        "default": "mdi:flash-outline"
+      },
+      "ec_max": {
+        "default": "mdi:flash-outline"
+      }
     },
     "switch": {
       "schedule_control": {
         "default": "mdi:calendar-sync",
-        "state": { "off": "mdi:calendar-remove-outline" }
+        "state": {
+          "off": "mdi:calendar-remove-outline"
+        }
+      },
+      "night_lighting": {
+        "default": "mdi:weather-sunny",
+        "state": {
+          "on": "mdi:weather-night"
+        }
       }
     },
     "todo": {
-      "tasks": { "default": "mdi:clipboard-list-outline" }
+      "tasks": {
+        "default": "mdi:clipboard-list-outline"
+      }
     }
   },
   "services": {
-    "start_grow": { "service": "mdi:sprout" },
-    "end_grow": { "service": "mdi:stop-circle-outline" },
-    "set_stage": { "service": "mdi:stairs" },
-    "advance_stage": { "service": "mdi:skip-next" },
-    "log_reading": { "service": "mdi:water-check" },
-    "sync_devices": { "service": "mdi:sync" }
+    "start_grow": {
+      "service": "mdi:sprout"
+    },
+    "end_grow": {
+      "service": "mdi:stop-circle-outline"
+    },
+    "set_stage": {
+      "service": "mdi:stairs"
+    },
+    "advance_stage": {
+      "service": "mdi:skip-next"
+    },
+    "log_reading": {
+      "service": "mdi:water-check"
+    },
+    "sync_devices": {
+      "service": "mdi:sync"
+    },
+    "previous_stage": {
+      "service": "mdi:skip-previous"
+    }
   }
 }

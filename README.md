@@ -28,22 +28,24 @@ Requires Home Assistant 2025.8 or newer.
 
 ## Setup
 
-**1. Add a grow system.** Give it a name, pick the devices the plan should drive, and optionally a pH
-and/or EC sensor (leave these empty to log readings by hand). Then give each device a short name, such
-as "Side lights".
+**1. Add a grow system.** Give it a name, pick the devices the plan should drive, and optionally pH, EC,
+room temperature and room humidity sensors. Leave pH/EC empty to log readings by hand. Then give each device a short name, such
+as "Side lights", and tick which devices are **lights** (they follow the Night lighting switch).
 
-**2. Add a grow plan.** On the integration's page, choose **Add grow plan**. Start blank or from a
-preset. Presets include **Lettuce** and **Leafy greens**, each with 3 stages of light and pump
-schedules. When you use a preset, you match its roles (center lights, side lights, water pump) to your
-devices.
+**2. Add a grow plan.** On the integration's page, choose **Add grow plan**. Start blank or from one
+of the built-in presets: Bell Pepper, Leafy Greens, Lettuce, Pepper, Spinach and Tomato, taken from
+the Elfsys Grow Cloud app's templates. Each preset has every stage, the light and pump schedules,
+the expected outcomes, the pH and room-temperature ranges, each stage's EC range, and the full task
+list with notes. Elfsys gives no humidity guidance, so humidity ranges start empty. When
+you use a preset, you match its roles (center lights, side lights, water pump) to your devices.
 
 **3. Edit the plan** at any time with the plan's ⋮ → **Reconfigure** menu:
 
 | Menu | What it does |
 |---|---|
-| Name, target pH and notes | Plan-level settings. Target pH applies to the whole plan. |
-| Add / Edit a stage | Name, type, estimated days, target EC, expected outcome, then one schedule form per device. |
-| Edit tasks | Add, edit or remove tasks for a stage. Each task has a day of the stage, a type, a title and a note. |
+| Name, pH, temperature, humidity and notes | Plan-level ranges: pH, room temperature (in your Home Assistant unit) and room humidity. |
+| Add / Edit a stage | Name, type, estimated days, EC range, expected outcome, then one schedule form per device. |
+| Edit tasks | Add, edit or remove tasks for a stage. Each task has a type, title, method and note, and runs on one or more days of the stage (e.g. `1, 4, 7`), optionally repeating every *N* days until a given day or the end of the stage. |
 | Reorder / Remove a stage | Stage order is the plan's order. |
 | Save plan | Nothing is written until you save. |
 
@@ -70,6 +72,10 @@ A full re-sync happens when Home Assistant starts, when a grow starts, when the 
 
 Turn off **Schedule control** to keep tracking the grow without touching any device.
 
+Turn on **Night lighting** to run the lights at night. Every light's on/off window moves by 12
+hours, so a 06:00–21:00 window becomes 18:00–09:00. Devices that aren't marked as lights, such as
+the pump, keep their schedules. You can switch it at any time, or set it when starting a grow.
+
 ## Entities
 
 For each grow system:
@@ -78,21 +84,28 @@ For each grow system:
 |---|---|
 | `select` Plan / Stage | Start, switch or end a grow. Jump to a stage. |
 | `button` Next / Previous / Restart stage, Sync devices, Water checked | Stage control and device sync. *Water checked* stamps a manual reading without changing the values. |
-| `switch` Schedule control | Enable or disable device switching. |
-| `todo` Tasks | The current stage's tasks, each due on *stage start + day − 1*. You can also add your own items here. |
-| `sensor` Active plan, Current stage, Stage day, Stage days remaining, Stage progress, Grow day, Grow started, Expected end, Target pH, Target EC, Tasks due, Next task | Status. *Current stage* has the full stage details, including each device's schedule, as attributes. |
+| `switch` Schedule control, Night lighting | Enable or disable device switching; run the lights at night. |
+| `todo` Tasks | The current stage's tasks. Each day a task runs on is its own item, due on *stage start + day − 1*. You can also add your own items here. |
+| `sensor` Active plan, Current stage, Stage day, Stage days remaining, Stage progress, Grow day, Grow started, Expected end, pH min/max, EC min/max, Tasks due, Next task | Status. *Current stage* has the full stage details, including each device's schedule, as attributes. |
 | `number` Measured pH / EC | Manual readings. Only created when no sensor is configured. |
-| `binary_sensor` pH / EC out of range, Water reading overdue | Problems, compared against the targets and the tolerances in the options. |
+| `binary_sensor` pH / EC out of range, Water reading overdue | Problems. pH is compared with the plan's range and EC with the stage's range. |
+| `binary_sensor` Temperature / Humidity out of range | Only created when a room temperature or humidity sensor is configured. The current value and the range are attributes. |
 | `binary_sensor` *Device* scheduled | Whether the schedule wants that device on right now. Compare it with the device to spot a manual override. |
 
-Stages advance only when you advance them, unless you turn on **Advance stages automatically** in the
-options. With it on, the next stage starts at midnight once the current stage's estimated days have
-passed.
+**Previous stage** (or picking the earlier stage in the Stage select) undoes an advance. The earlier
+stage comes back with its original start date and checked-off tasks, so a stage you advanced too
+soon picks up where it left off. If there's nothing to undo, for example after starting a grow at
+stage 2, the previous stage starts today instead.
+
+Stages never change on their own. A stage's estimated days are for planning only. On its last
+estimated day the task list gets a **Check if ready for *next stage*** item, with the stage's expected
+outcome as its note. When the plants look ready, press **Next stage**. Checking the item off doesn't
+change the stage.
 
 ## Actions
 
-`hydro_grow_planner.start_grow`, `end_grow`, `set_stage`, `advance_stage`, `log_reading`,
-`sync_devices`. The `config_entry_id` field is optional if you have only one grow system. `plan` and
+`hydro_grow_planner.start_grow` (optionally with `night_lighting`), `end_grow`, `set_stage`,
+`advance_stage`, `previous_stage`, `log_reading`, `sync_devices`. The `config_entry_id` field is optional if you have only one grow system. `plan` and
 `stage` take names, and `stage` also accepts a 1-based number.
 
 ```yaml
@@ -126,7 +139,27 @@ actions:
         {% endfor %}{{ 'Check pH/EC.' if trigger.event.data.reading_overdue }}
 ```
 
-For out-of-range water, trigger on the `pH out of range` or `EC out of range` binary sensors.
+For out-of-range water or room climate, trigger on the problem sensors. The `for:` delay keeps a
+reading that hovers at the edge of its range from sending repeated alerts:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.tower_ph_out_of_range
+      - binary_sensor.tower_ec_out_of_range
+      - binary_sensor.tower_temperature_out_of_range
+      - binary_sensor.tower_humidity_out_of_range
+    to: "on"
+    for: "00:15:00"
+actions:
+  - action: notify.mobile_app_phone
+    data:
+      title: "🌱 {{ trigger.to_state.name }}"
+      message: >-
+        {{ trigger.to_state.attributes.value }}{{ trigger.to_state.attributes.unit | default('') }}
+        (range {{ trigger.to_state.attributes.min }}–{{ trigger.to_state.attributes.max }})
+```
 
 ## Development
 

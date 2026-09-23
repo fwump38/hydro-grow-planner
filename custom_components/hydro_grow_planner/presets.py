@@ -1,14 +1,16 @@
-"""Built-in starter plans.
+"""Built-in starter plans: the Elfsys Grow Cloud templates (see presets_data.py).
 
 Preset schedules are keyed by *role* rather than by device. When a plan is
 created from a preset, the user maps each role onto one of their devices.
-Targets (pH/EC), outcomes and tasks are intentionally left blank: they depend on
-the crop, nutrients and water, and a wrong number would drive real alerts.
+pH (per plan) and EC (per stage) ranges come from the templates' task notes.
+Light windows are the daytime versions; the Night lighting switch shifts them.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from .presets_data import PRESETS
 
 ROLE_CENTER_LIGHTS = "center_lights"
 ROLE_SIDE_LIGHTS = "side_lights"
@@ -20,97 +22,13 @@ PRESET_ROLES: dict[str, str] = {
     ROLE_WATER_PUMP: "Water pump",
 }
 
-_OFF = {"mode": "off"}
-_PUMP = {"mode": "interval", "interval_on": 900, "interval_every": 10800}
 
-
-def _window(on: str, off: str) -> dict[str, Any]:
-    return {"mode": "time_window", "on_time": f"{on}:00", "off_time": f"{off}:00"}
-
-
-def _stage(name: str, stage_type: str, days: int, schedules: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "name": name,
-        "stage_type": stage_type,
-        "days": days,
-        "outcome": "",
-        "schedules": schedules,
-        "tasks": [],
-    }
-
-
-PRESETS: dict[str, dict[str, Any]] = {
-    "lettuce": {
-        "name": "Lettuce",
-        "stages": [
-            _stage(
-                "Sprouting",
-                "sprouting",
-                7,
-                {
-                    ROLE_CENTER_LIGHTS: _OFF,
-                    ROLE_SIDE_LIGHTS: _window("11:30", "16:30"),
-                    ROLE_WATER_PUMP: _PUMP,
-                },
-            ),
-            _stage(
-                "Seedling",
-                "seedling",
-                7,
-                {
-                    ROLE_CENTER_LIGHTS: _window("10:00", "18:00"),
-                    ROLE_SIDE_LIGHTS: _OFF,
-                    ROLE_WATER_PUMP: _PUMP,
-                },
-            ),
-            _stage(
-                "Vegetative",
-                "vegetative",
-                21,
-                {
-                    ROLE_CENTER_LIGHTS: _window("07:00", "21:00"),
-                    ROLE_SIDE_LIGHTS: _window("07:00", "21:00"),
-                    ROLE_WATER_PUMP: _PUMP,
-                },
-            ),
-        ],
-    },
-    "leafy_greens": {
-        "name": "Leafy Greens",
-        "stages": [
-            _stage(
-                "Sprouting",
-                "sprouting",
-                7,
-                {
-                    ROLE_CENTER_LIGHTS: _OFF,
-                    ROLE_SIDE_LIGHTS: _window("06:00", "21:00"),
-                    ROLE_WATER_PUMP: _PUMP,
-                },
-            ),
-            _stage(
-                "Seedling",
-                "seedling",
-                7,
-                {
-                    ROLE_CENTER_LIGHTS: _window("06:00", "21:00"),
-                    ROLE_SIDE_LIGHTS: _window("09:00", "18:00"),
-                    ROLE_WATER_PUMP: _PUMP,
-                },
-            ),
-            _stage(
-                "Vegetative",
-                "vegetative",
-                90,
-                {
-                    ROLE_CENTER_LIGHTS: _window("05:00", "22:00"),
-                    ROLE_SIDE_LIGHTS: _window("05:00", "22:00"),
-                    ROLE_WATER_PUMP: _PUMP,
-                },
-            ),
-        ],
-    },
-}
+def preset_label(key: str) -> str:
+    """Return a dropdown label, e.g. "Lettuce — 3 stages, 35 days"."""
+    preset = PRESETS[key]
+    stages = preset["stages"]
+    days = sum(stage["days"] for stage in stages)
+    return f"{preset['name']} — {len(stages)} stages, {days} days"
 
 
 def build_from_preset(
@@ -125,5 +43,17 @@ def build_from_preset(
             for role, device_id in role_map.items()
             if device_id and role in stage["schedules"]
         }
-        stages.append({**stage, "id": new_id(), "schedules": schedules, "tasks": []})
-    return {"name": preset["name"], "notes": "", "stages": stages}
+        tasks = [{**task, "id": new_id()} for task in stage["tasks"]]
+        stages.append({**stage, "id": new_id(), "schedules": schedules, "tasks": tasks})
+    return {
+        "name": preset["name"],
+        "ph_min": preset.get("ph_min"),
+        "ph_max": preset.get("ph_max"),
+        "temp_min": preset.get("temp_min"),
+        "temp_max": preset.get("temp_max"),
+        "temp_unit": preset.get("temp_unit"),
+        "humidity_min": None,
+        "humidity_max": None,
+        "notes": "",
+        "stages": stages,
+    }

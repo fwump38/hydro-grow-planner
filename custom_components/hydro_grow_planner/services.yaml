@@ -16,6 +16,9 @@ start_grow:
     start_date:
       selector:
         date:
+    night_lighting:
+      selector:
+        boolean:
 
 end_grow:
   fields:
@@ -40,6 +43,13 @@ set_stage:
         date:
 
 advance_stage:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: hydro_grow_planner
+
+previous_stage:
   fields:
     config_entry_id:
       selector:

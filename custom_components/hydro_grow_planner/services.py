@@ -11,6 +11,7 @@ import voluptuous as vol
 from .const import (
     ATTR_CONFIG_ENTRY_ID,
     ATTR_EC,
+    ATTR_NIGHT_LIGHTING,
     ATTR_PH,
     ATTR_PLAN,
     ATTR_STAGE,
@@ -19,6 +20,7 @@ from .const import (
     SERVICE_ADVANCE_STAGE,
     SERVICE_END_GROW,
     SERVICE_LOG_READING,
+    SERVICE_PREVIOUS_STAGE,
     SERVICE_SET_STAGE,
     SERVICE_START_GROW,
     SERVICE_SYNC_DEVICES,
@@ -34,6 +36,7 @@ SCHEMA_START = vol.Schema(
         vol.Required(ATTR_PLAN): cv.string,
         vol.Optional(ATTR_STAGE): cv.string,
         vol.Optional(ATTR_START_DATE): cv.date,
+        vol.Optional(ATTR_NIGHT_LIGHTING): cv.boolean,
     }
 )
 SCHEMA_SET_STAGE = vol.Schema(
@@ -77,7 +80,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
     async def start_grow(call: ServiceCall) -> None:
         await _manager(hass, call).async_start_grow(
-            call.data[ATTR_PLAN], call.data.get(ATTR_STAGE), call.data.get(ATTR_START_DATE)
+            call.data[ATTR_PLAN],
+            call.data.get(ATTR_STAGE),
+            call.data.get(ATTR_START_DATE),
+            call.data.get(ATTR_NIGHT_LIGHTING),
         )
 
     async def end_grow(call: ServiceCall) -> None:
@@ -91,6 +97,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def advance_stage(call: ServiceCall) -> None:
         await _manager(hass, call).async_advance_stage()
 
+    async def previous_stage(call: ServiceCall) -> None:
+        await _manager(hass, call).async_previous_stage()
+
     async def log_reading(call: ServiceCall) -> None:
         await _manager(hass, call).async_log_reading(call.data.get(ATTR_PH), call.data.get(ATTR_EC))
 
@@ -101,5 +110,6 @@ def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_END_GROW, end_grow, SCHEMA_BASE)
     hass.services.async_register(DOMAIN, SERVICE_SET_STAGE, set_stage, SCHEMA_SET_STAGE)
     hass.services.async_register(DOMAIN, SERVICE_ADVANCE_STAGE, advance_stage, SCHEMA_BASE)
+    hass.services.async_register(DOMAIN, SERVICE_PREVIOUS_STAGE, previous_stage, SCHEMA_BASE)
     hass.services.async_register(DOMAIN, SERVICE_LOG_READING, log_reading, SCHEMA_LOG)
     hass.services.async_register(DOMAIN, SERVICE_SYNC_DEVICES, sync_devices, SCHEMA_BASE)

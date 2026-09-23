@@ -60,7 +60,7 @@ class GrowTodoList(GrowEntity, TodoListEntity):
             TodoItem(
                 uid=t.uid,
                 summary=t.task.title,
-                description=t.task.note or None,
+                description=t.task.description or None,
                 due=t.due,
                 status=TodoItemStatus.COMPLETED if t.completed else TodoItemStatus.NEEDS_ACTION,
             )

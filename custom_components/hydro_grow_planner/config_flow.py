@@ -22,27 +22,31 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers import selector
+from homeassistant.util.unit_conversion import TemperatureConverter
 import voluptuous as vol
 
 from .const import (
-    CONF_AUTO_ADVANCE,
     CONF_DEVICE_ID,
+    CONF_DEVICE_LIGHT,
     CONF_DEVICE_NAME,
     CONF_DEVICES,
     CONF_EC_SENSOR,
-    CONF_EC_TOLERANCE,
     CONF_ENTITY_ID,
+    CONF_HUMIDITY_MAX,
+    CONF_HUMIDITY_MIN,
+    CONF_HUMIDITY_SENSOR,
     CONF_NOTES,
+    CONF_PH_MAX,
+    CONF_PH_MIN,
     CONF_PH_SENSOR,
-    CONF_PH_TOLERANCE,
     CONF_PLAN_NAME,
     CONF_READING_INTERVAL_DAYS,
     CONF_REMINDER_TIME,
     CONF_STAGES,
-    CONF_TARGET_PH,
-    DEFAULT_AUTO_ADVANCE,
-    DEFAULT_EC_TOLERANCE,
-    DEFAULT_PH_TOLERANCE,
+    CONF_TEMP_MAX,
+    CONF_TEMP_MIN,
+    CONF_TEMP_UNIT,
+    CONF_TEMPERATURE_SENSOR,
     DEFAULT_READING_INTERVAL_DAYS,
     DEFAULT_REMINDER_TIME,
     DOMAIN,
@@ -54,13 +58,16 @@ from .const import (
     SUBENTRY_TYPE_PLAN,
     TASK_TYPES,
 )
-from .models import DeviceSchedule, new_id
-from .presets import PRESET_ROLES, PRESETS, build_from_preset
+from .manager import guess_is_light
+from .models import DeviceSchedule, Plan, Stage, Task, describe_days, format_range, new_id
+from .presets import PRESET_ROLES, PRESETS, build_from_preset, preset_label
 from .schedule import describe
 
 CONTROLLABLE_DOMAINS = ["switch", "light", "fan", "input_boolean"]
 SKIP = "__skip__"
+BACK_LABEL = "↩ Back"
 BLANK = "blank"
+CONF_LIGHTS = "lights"
 
 # ---------------------------------------------------------------------------
 # Shared selectors
@@ -70,6 +77,18 @@ DEVICES_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain=CONTROLLABLE_DOMAINS, multiple=True)
 )
 SENSOR_SELECTOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+TEMPERATURE_SELECTOR = selector.EntitySelector(
+    selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+)
+HUMIDITY_SELECTOR = selector.EntitySelector(
+    selector.EntitySelectorConfig(domain="sensor", device_class="humidity")
+)
+SENSOR_KEYS = (CONF_PH_SENSOR, CONF_EC_SENSOR, CONF_TEMPERATURE_SENSOR, CONF_HUMIDITY_SENSOR)
+PERCENT = selector.NumberSelector(
+    selector.NumberSelectorConfig(
+        min=0, max=100, step=1, mode=selector.NumberSelectorMode.BOX, unit_of_measurement="%"
+    )
+)
 TEXT = selector.TextSelector()
 MULTILINE = selector.TextSelector(selector.TextSelectorConfig(multiline=True))
 DAYS = selector.NumberSelector(
@@ -135,20 +154,6 @@ def _settings_schema(options: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(
-                CONF_PH_TOLERANCE, default=options.get(CONF_PH_TOLERANCE, DEFAULT_PH_TOLERANCE)
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.05, max=3, step=0.05, mode=selector.NumberSelectorMode.BOX
-                )
-            ),
-            vol.Required(
-                CONF_EC_TOLERANCE, default=options.get(CONF_EC_TOLERANCE, DEFAULT_EC_TOLERANCE)
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0.05, max=5, step=0.05, mode=selector.NumberSelectorMode.BOX
-                )
-            ),
-            vol.Required(
                 CONF_READING_INTERVAL_DAYS,
                 default=options.get(CONF_READING_INTERVAL_DAYS, DEFAULT_READING_INTERVAL_DAYS),
             ): selector.NumberSelector(
@@ -159,16 +164,37 @@ def _settings_schema(options: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_REMINDER_TIME, default=options.get(CONF_REMINDER_TIME, DEFAULT_REMINDER_TIME)
             ): selector.TimeSelector(),
-            vol.Required(
-                CONF_AUTO_ADVANCE, default=options.get(CONF_AUTO_ADVANCE, DEFAULT_AUTO_ADVANCE)
-            ): selector.BooleanSelector(),
         }
     )
 
 
 def _names_schema(entity_ids: list[str], names: dict[str, str]) -> vol.Schema:
-    """One text field per device, keyed by entity id."""
-    return vol.Schema({vol.Required(eid, default=names[eid]): TEXT for eid in entity_ids})
+    """One text field per device (keyed by entity id), plus which of them are lights."""
+    schema: dict[Any, Any] = {vol.Required(eid, default=names[eid]): TEXT for eid in entity_ids}
+    lights = [eid for eid in entity_ids if guess_is_light(eid, names[eid])]
+    schema[vol.Optional(CONF_LIGHTS, default=lights)] = selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(value=eid, label=f"{names[eid]} ({eid})")
+                for eid in entity_ids
+            ],
+            multiple=True,
+        )
+    )
+    return vol.Schema(schema)
+
+
+def _named_devices(hass: Any, entity_ids: list[str], user_input: dict[str, Any]) -> list[dict]:
+    lights = set(user_input.get(CONF_LIGHTS, []))
+    return [
+        {
+            CONF_DEVICE_ID: new_id(),
+            CONF_DEVICE_NAME: user_input[eid].strip() or _entity_name(hass, eid),
+            CONF_ENTITY_ID: eid,
+            CONF_DEVICE_LIGHT: eid in lights,
+        }
+        for eid in entity_ids
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +238,8 @@ class GrowConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_NAME: user_input[CONF_NAME],
                     CONF_PH_SENSOR: user_input.get(CONF_PH_SENSOR),
                     CONF_EC_SENSOR: user_input.get(CONF_EC_SENSOR),
+                    CONF_TEMPERATURE_SENSOR: user_input.get(CONF_TEMPERATURE_SENSOR),
+                    CONF_HUMIDITY_SENSOR: user_input.get(CONF_HUMIDITY_SENSOR),
                 }
                 self._entities = user_input[CONF_DEVICES]
                 return await self.async_step_device_names()
@@ -225,6 +253,8 @@ class GrowConfigFlow(ConfigFlow, domain=DOMAIN):
                         vol.Required(CONF_DEVICES): DEVICES_SELECTOR,
                         vol.Optional(CONF_PH_SENSOR): SENSOR_SELECTOR,
                         vol.Optional(CONF_EC_SENSOR): SENSOR_SELECTOR,
+                        vol.Optional(CONF_TEMPERATURE_SENSOR): TEMPERATURE_SELECTOR,
+                        vol.Optional(CONF_HUMIDITY_SENSOR): HUMIDITY_SELECTOR,
                     }
                 ),
                 user_input or {CONF_NAME: "Grow System"},
@@ -237,23 +267,13 @@ class GrowConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Give each device a short role name (e.g. "Side lights")."""
         if user_input is not None:
-            self._data[CONF_DEVICES] = [
-                {
-                    CONF_DEVICE_ID: new_id(),
-                    CONF_DEVICE_NAME: user_input[eid].strip() or _entity_name(self.hass, eid),
-                    CONF_ENTITY_ID: eid,
-                }
-                for eid in self._entities
-            ]
+            self._data[CONF_DEVICES] = _named_devices(self.hass, self._entities, user_input)
             return self.async_create_entry(
                 title=self._data[CONF_NAME],
                 data=self._data,
                 options={
-                    CONF_PH_TOLERANCE: DEFAULT_PH_TOLERANCE,
-                    CONF_EC_TOLERANCE: DEFAULT_EC_TOLERANCE,
                     CONF_READING_INTERVAL_DAYS: DEFAULT_READING_INTERVAL_DAYS,
                     CONF_REMINDER_TIME: DEFAULT_REMINDER_TIME,
-                    CONF_AUTO_ADVANCE: DEFAULT_AUTO_ADVANCE,
                 },
             )
         names = {eid: _entity_name(self.hass, eid) for eid in self._entities}
@@ -289,9 +309,11 @@ class GrowOptionsFlow(OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Tolerances, reminders, auto-advance."""
+        """Reading interval and reminder time."""
         if user_input is not None:
-            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+            options = {**self.config_entry.options, **user_input}
+            options.pop("auto_advance", None)  # removed: stages only change by hand
+            return self.async_create_entry(data=options)
         return self.async_show_form(
             step_id="settings", data_schema=_settings_schema(dict(self.config_entry.options))
         )
@@ -307,6 +329,8 @@ class GrowOptionsFlow(OptionsFlow):
                     **self.config_entry.data,
                     CONF_PH_SENSOR: user_input.get(CONF_PH_SENSOR),
                     CONF_EC_SENSOR: user_input.get(CONF_EC_SENSOR),
+                    CONF_TEMPERATURE_SENSOR: user_input.get(CONF_TEMPERATURE_SENSOR),
+                    CONF_HUMIDITY_SENSOR: user_input.get(CONF_HUMIDITY_SENSOR),
                 },
             )
             return self.async_create_entry(data=dict(self.config_entry.options))
@@ -317,13 +341,11 @@ class GrowOptionsFlow(OptionsFlow):
                     {
                         vol.Optional(CONF_PH_SENSOR): SENSOR_SELECTOR,
                         vol.Optional(CONF_EC_SENSOR): SENSOR_SELECTOR,
+                        vol.Optional(CONF_TEMPERATURE_SENSOR): TEMPERATURE_SELECTOR,
+                        vol.Optional(CONF_HUMIDITY_SENSOR): HUMIDITY_SELECTOR,
                     }
                 ),
-                {
-                    k: v
-                    for k, v in self.config_entry.data.items()
-                    if k in (CONF_PH_SENSOR, CONF_EC_SENSOR) and v
-                },
+                {k: v for k, v in self.config_entry.data.items() if k in SENSOR_KEYS and v},
             ),
         )
 
@@ -350,14 +372,7 @@ class GrowOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Name the new devices."""
         if user_input is not None:
-            devices = self._devices + [
-                {
-                    CONF_DEVICE_ID: new_id(),
-                    CONF_DEVICE_NAME: user_input[eid].strip() or _entity_name(self.hass, eid),
-                    CONF_ENTITY_ID: eid,
-                }
-                for eid in self._new_entities
-            ]
+            devices = self._devices + _named_devices(self.hass, self._new_entities, user_input)
             return self._save_devices(devices)
         names = {eid: _entity_name(self.hass, eid) for eid in self._new_entities}
         return self.async_show_form(
@@ -367,19 +382,10 @@ class GrowOptionsFlow(OptionsFlow):
     async def async_step_rename_device(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Rename a device or point it at a different entity."""
+        """Pick the device to edit."""
         if user_input is not None:
-            devices = [
-                {
-                    **d,
-                    CONF_DEVICE_NAME: user_input[CONF_DEVICE_NAME],
-                    CONF_ENTITY_ID: user_input[CONF_ENTITY_ID],
-                }
-                if d[CONF_DEVICE_ID] == user_input[CONF_DEVICE_ID]
-                else d
-                for d in self._devices
-            ]
-            return self._save_devices(devices)
+            self._device_id = user_input[CONF_DEVICE_ID]
+            return await self.async_step_device_details()
         if not self._devices:
             return self.async_abort(reason="no_devices")
         return self.async_show_form(
@@ -391,12 +397,46 @@ class GrowOptionsFlow(OptionsFlow):
                             d[CONF_DEVICE_ID]: f"{d[CONF_DEVICE_NAME]} ({d[CONF_ENTITY_ID]})"
                             for d in self._devices
                         }
-                    ),
-                    vol.Required(CONF_DEVICE_NAME): TEXT,
-                    vol.Required(CONF_ENTITY_ID): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain=CONTROLLABLE_DOMAINS)
-                    ),
+                    )
                 }
+            ),
+        )
+
+    async def async_step_device_details(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Rename a device, point it at another entity, or mark it as a light."""
+        device = next(d for d in self._devices if d[CONF_DEVICE_ID] == self._device_id)
+        if user_input is not None:
+            updated = {
+                **device,
+                CONF_DEVICE_NAME: user_input[CONF_DEVICE_NAME].strip(),
+                CONF_ENTITY_ID: user_input[CONF_ENTITY_ID],
+                CONF_DEVICE_LIGHT: user_input[CONF_DEVICE_LIGHT],
+            }
+            return self._save_devices(
+                [updated if d[CONF_DEVICE_ID] == self._device_id else d for d in self._devices]
+            )
+        current = {
+            CONF_DEVICE_NAME: device[CONF_DEVICE_NAME],
+            CONF_ENTITY_ID: device[CONF_ENTITY_ID],
+            CONF_DEVICE_LIGHT: device.get(
+                CONF_DEVICE_LIGHT, guess_is_light(device[CONF_ENTITY_ID], device[CONF_DEVICE_NAME])
+            ),
+        }
+        return self.async_show_form(
+            step_id="device_details",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Required(CONF_DEVICE_NAME): TEXT,
+                        vol.Required(CONF_ENTITY_ID): selector.EntitySelector(
+                            selector.EntitySelectorConfig(domain=CONTROLLABLE_DOMAINS)
+                        ),
+                        vol.Required(CONF_DEVICE_LIGHT): selector.BooleanSelector(),
+                    }
+                ),
+                current,
             ),
         )
 
@@ -454,6 +494,7 @@ class PlanSubentryFlow(ConfigSubentryFlow):
         self._task_id: str | None = None
         self._stage_draft: dict[str, Any] = {}
         self._schedule_index = 0
+        self._pick_action: str | None = None
 
     # -- helpers ------------------------------------------------------
 
@@ -482,6 +523,42 @@ class PlanSubentryFlow(ConfigSubentryFlow):
             if sub.subentry_type == SUBENTRY_TYPE_PLAN and sub_id != current
         )
 
+    # Temperatures are stored with their unit (presets use the Elfsys °F values) and
+    # shown and entered in Home Assistant's configured unit.
+
+    def _temperature_selector(self) -> selector.NumberSelector:
+        return selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=-20,
+                max=120,
+                step=0.5,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement=self.hass.config.units.temperature_unit,
+            )
+        )
+
+    def _set_temperatures(self, low: float | None, high: float | None) -> None:
+        self._plan[CONF_TEMP_MIN] = low
+        self._plan[CONF_TEMP_MAX] = high
+        self._plan[CONF_TEMP_UNIT] = self.hass.config.units.temperature_unit
+
+    def _shown_temperature(self, value: float | None, unit: str) -> float | None:
+        shown = self.hass.config.units.temperature_unit
+        if value is None or unit == shown:
+            return value
+        return round(TemperatureConverter.convert(value, unit, shown), 1)
+
+    def _plan_suggestions(self) -> dict[str, Any]:
+        model = Plan.from_dict("", self._plan)
+        current = {
+            **self._plan,
+            CONF_PH_MIN: model.ph_min,
+            CONF_PH_MAX: model.ph_max,
+            CONF_TEMP_MIN: self._shown_temperature(model.temp_min, model.temp_unit),
+            CONF_TEMP_MAX: self._shown_temperature(model.temp_max, model.temp_unit),
+        }
+        return {k: v for k, v in current.items() if v is not None and k != CONF_STAGES}
+
     def _is_new(self) -> bool:
         return self.source == SOURCE_USER
 
@@ -489,12 +566,18 @@ class PlanSubentryFlow(ConfigSubentryFlow):
         """Markdown summary of the plan for the menu description."""
         devices = {d[CONF_DEVICE_ID]: d[CONF_DEVICE_NAME] for d in self._devices}
         lines = []
-        if self._plan.get(CONF_TARGET_PH) is not None:
-            lines.append(f"Target pH: {self._plan[CONF_TARGET_PH]}")
+        model = Plan.from_dict("", self._plan)
+        if ph := format_range(model.ph_min, model.ph_max):
+            lines.append(f"pH {ph}")
+        if temp := format_range(model.temp_min, model.temp_max):
+            lines.append(f"Temperature {temp} {model.temp_unit}")
+        if humidity := format_range(model.humidity_min, model.humidity_max):
+            lines.append(f"Humidity {humidity} %")
         if not self._stages:
             lines.append("_No stages yet._")
         for i, stage in enumerate(self._stages, start=1):
-            ec = f", EC {stage['target_ec']}" if stage.get("target_ec") is not None else ""
+            ec_range = format_range(stage.get("ec_min"), stage.get("ec_max"))
+            ec = f", EC {ec_range}" if ec_range else ""
             lines.append(
                 f"**{i}. {stage['name']}** — {stage['days']} days{ec}, "
                 f"{len(stage.get('tasks', []))} tasks"
@@ -527,7 +610,9 @@ class PlanSubentryFlow(ConfigSubentryFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_PLAN_NAME): TEXT,
-                    vol.Required("preset", default=BLANK): _select([BLANK, *PRESETS], "preset"),
+                    vol.Required("preset", default=BLANK): _choice(
+                        {BLANK: "Blank plan", **{key: preset_label(key) for key in PRESETS}}
+                    ),
                 }
             ),
             errors=errors,
@@ -617,9 +702,20 @@ class PlanSubentryFlow(ConfigSubentryFlow):
             name = user_input[CONF_PLAN_NAME].strip()
             if self._name_taken(name):
                 errors[CONF_PLAN_NAME] = "name_taken"
+            elif _inverted(user_input.get(CONF_PH_MIN), user_input.get(CONF_PH_MAX)):
+                errors["base"] = "ph_range_inverted"
+            elif _inverted(user_input.get(CONF_TEMP_MIN), user_input.get(CONF_TEMP_MAX)):
+                errors["base"] = "temp_range_inverted"
+            elif _inverted(user_input.get(CONF_HUMIDITY_MIN), user_input.get(CONF_HUMIDITY_MAX)):
+                errors["base"] = "humidity_range_inverted"
             else:
                 self._plan[CONF_PLAN_NAME] = name
-                self._plan[CONF_TARGET_PH] = user_input.get(CONF_TARGET_PH)
+                self._plan[CONF_PH_MIN] = user_input.get(CONF_PH_MIN)
+                self._plan[CONF_PH_MAX] = user_input.get(CONF_PH_MAX)
+                self._set_temperatures(user_input.get(CONF_TEMP_MIN), user_input.get(CONF_TEMP_MAX))
+                self._plan[CONF_HUMIDITY_MIN] = user_input.get(CONF_HUMIDITY_MIN)
+                self._plan[CONF_HUMIDITY_MAX] = user_input.get(CONF_HUMIDITY_MAX)
+                self._plan.pop("target_ph", None)  # superseded by ph_min/ph_max
                 self._plan[CONF_NOTES] = user_input.get(CONF_NOTES, "")
                 return await self.async_step_menu()
         return self.async_show_form(
@@ -628,11 +724,16 @@ class PlanSubentryFlow(ConfigSubentryFlow):
                 vol.Schema(
                     {
                         vol.Required(CONF_PLAN_NAME): TEXT,
-                        vol.Optional(CONF_TARGET_PH): PH,
+                        vol.Optional(CONF_PH_MIN): PH,
+                        vol.Optional(CONF_PH_MAX): PH,
+                        vol.Optional(CONF_TEMP_MIN): self._temperature_selector(),
+                        vol.Optional(CONF_TEMP_MAX): self._temperature_selector(),
+                        vol.Optional(CONF_HUMIDITY_MIN): PERCENT,
+                        vol.Optional(CONF_HUMIDITY_MAX): PERCENT,
                         vol.Optional(CONF_NOTES): MULTILINE,
                     }
                 ),
-                {k: v for k, v in self._plan.items() if v is not None},
+                user_input or self._plan_suggestions(),
             ),
             errors=errors,
         )
@@ -645,7 +746,8 @@ class PlanSubentryFlow(ConfigSubentryFlow):
                 vol.Required("name"): TEXT,
                 vol.Required("stage_type"): _select(STAGE_TYPES, "stage_type"),
                 vol.Required("days"): DAYS,
-                vol.Optional("target_ec"): EC,
+                vol.Optional("ec_min"): EC,
+                vol.Optional("ec_max"): EC,
                 vol.Optional("outcome"): MULTILINE,
             }
         )
@@ -666,7 +768,10 @@ class PlanSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """New stage: basics."""
-        if user_input is not None:
+        errors: dict[str, str] = {}
+        if user_input is not None and _inverted(user_input.get("ec_min"), user_input.get("ec_max")):
+            errors["base"] = "ec_range_inverted"
+        elif user_input is not None:
             self._stage_id = None
             self._stage_draft = {
                 "id": new_id(),
@@ -682,36 +787,42 @@ class PlanSubentryFlow(ConfigSubentryFlow):
         }
         return self.async_show_form(
             step_id="add_stage",
-            data_schema=self.add_suggested_values_to_schema(self._stage_schema(), suggested),
+            data_schema=self.add_suggested_values_to_schema(
+                self._stage_schema(), user_input or suggested
+            ),
+            errors=errors,
         )
 
     async def async_step_edit_stage(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Pick a stage to edit."""
-        if user_input is not None:
-            self._stage_id = user_input["stage"]
-            return await self.async_step_stage_basics()
-        return self.async_show_form(
-            step_id="edit_stage",
-            data_schema=vol.Schema({vol.Required("stage"): _choice(self._stage_choices())}),
-        )
+        return self._show_picker("edit_stage", self._stage_choices(), back="menu")
 
     async def async_step_stage_basics(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Edit a stage's basics."""
         stage = self._stage()
-        if user_input is not None:
-            self._stage_draft = {**copy.deepcopy(stage), **_stage_fields(user_input)}
+        errors: dict[str, str] = {}
+        if user_input is not None and _inverted(user_input.get("ec_min"), user_input.get("ec_max")):
+            errors["base"] = "ec_range_inverted"
+        elif user_input is not None:
+            draft = {**copy.deepcopy(stage), **_stage_fields(user_input)}
+            draft.pop("target_ec", None)  # superseded by ec_min/ec_max
+            self._stage_draft = draft
             self._schedule_index = 0
             return await self.async_step_stage_schedule()
+        model = Stage.from_dict(stage)
+        current = {**stage, "ec_min": model.ec_min, "ec_max": model.ec_max}
         return self.async_show_form(
             step_id="stage_basics",
             data_schema=self.add_suggested_values_to_schema(
-                self._stage_schema(), {k: v for k, v in stage.items() if v is not None}
+                self._stage_schema(),
+                user_input or {k: v for k, v in current.items() if v is not None},
             ),
             description_placeholders={"stage": stage["name"]},
+            errors=errors,
         )
 
     async def async_step_stage_schedule(
@@ -776,36 +887,26 @@ class PlanSubentryFlow(ConfigSubentryFlow):
     async def async_step_move_stage(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Move a stage to a new position."""
-        if user_input is not None:
-            stages = self._stages
-            stage = next(s for s in stages if s["id"] == user_input["stage"])
-            stages.remove(stage)
-            position = int(user_input["position"]) - 1
-            stages.insert(max(0, min(position, len(stages))), stage)
-            return await self.async_step_menu()
-        return self.async_show_form(
-            step_id="move_stage",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("stage"): _choice(self._stage_choices()),
-                    vol.Required("position"): _choice(
-                        {str(i): str(i) for i in range(1, len(self._stages) + 1)}
-                    ),
-                }
-            ),
-        )
+        """Pick a stage to move."""
+        return self._show_picker("move_stage", self._stage_choices(), back="menu")
 
     async def async_step_remove_stage(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Remove a stage."""
-        if user_input is not None:
-            self._plan[CONF_STAGES] = [s for s in self._stages if s["id"] != user_input["stage"]]
-            return await self.async_step_menu()
-        return self.async_show_form(
-            step_id="remove_stage",
-            data_schema=vol.Schema({vol.Required("stage"): _choice(self._stage_choices())}),
+        """Pick a stage to remove."""
+        return self._show_picker("remove_stage", self._stage_choices(), back="menu")
+
+    async def async_step_move_to(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Pick the new position for the chosen stage."""
+        current = next(i for i, s in enumerate(self._stages, 1) if s["id"] == self._stage_id)
+        positions = {
+            str(i): f"Position {i}" + (" (current)" if i == current else "")
+            for i in range(1, len(self._stages) + 1)
+        }
+        return self._show_picker(
+            "move_to", positions, back="menu", placeholders={"stage": self._stage()["name"]}
         )
 
     # -- tasks --------------------------------------------------------
@@ -814,21 +915,17 @@ class PlanSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Pick the stage whose tasks to edit."""
-        if user_input is not None:
-            self._stage_id = user_input["stage"]
-            return await self.async_step_task_menu()
-        return self.async_show_form(
-            step_id="tasks",
-            data_schema=vol.Schema({vol.Required("stage"): _choice(self._stage_choices())}),
-        )
+        return self._show_picker("tasks", self._stage_choices(), back="menu")
 
     async def async_step_task_menu(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Task actions for one stage."""
         stage = self._stage()
-        tasks = sorted(stage.get("tasks", []), key=lambda t: t["day"])
-        listing = "\n".join(f"- Day {t['day']}: {t['title']}" for t in tasks) or "_No tasks yet._"
+        listing = (
+            "\n".join(f"- {label}" for label in self._task_choices().values()) or "_No tasks yet._"
+        )
+        tasks = stage.get("tasks", [])
         options = ["add_task"]
         if tasks:
             options += ["edit_task", "remove_task"]
@@ -842,9 +939,16 @@ class PlanSubentryFlow(ConfigSubentryFlow):
     def _task_schema(self) -> vol.Schema:
         return vol.Schema(
             {
-                vol.Required("day"): DAYS,
+                vol.Required("days"): TEXT,
+                vol.Optional("every"): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=365, step=1, mode=selector.NumberSelectorMode.BOX
+                    )
+                ),
+                vol.Optional("until"): DAYS,
                 vol.Required("task_type"): _select(TASK_TYPES, "task_type"),
                 vol.Required("title"): TEXT,
+                vol.Optional("method"): TEXT,
                 vol.Optional("note"): MULTILINE,
             }
         )
@@ -853,33 +957,39 @@ class PlanSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Add a task to the stage."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self._stage().setdefault("tasks", []).append(
-                {"id": new_id(), **_task_fields(user_input)}
-            )
-            return await self.async_step_task_menu()
+            fields, error = _task_fields(user_input)
+            if error:
+                errors["base"] = error
+            else:
+                self._stage().setdefault("tasks", []).append({"id": new_id(), **fields})
+                return await self.async_step_task_menu()
         return self.async_show_form(
             step_id="add_task",
             data_schema=self.add_suggested_values_to_schema(
-                self._task_schema(), {"day": 1, "task_type": "reminder"}
+                self._task_schema(), user_input or {"days": "1", "task_type": "reminder"}
             ),
             description_placeholders={"stage": self._stage()["name"]},
+            errors=errors,
         )
 
     def _task_choices(self) -> dict[str, str]:
-        tasks = sorted(self._stage().get("tasks", []), key=lambda t: t["day"])
-        return {t["id"]: f"Day {t['day']}: {t['title']}" for t in tasks}
+        tasks = [Task.from_dict(t) for t in self._stage().get("tasks", [])]
+        return {
+            t.id: f"{describe_days(t.days, t.every, t.until)}: {t.title}"
+            for t in sorted(tasks, key=lambda t: t.first_day)
+        }
 
     async def async_step_edit_task(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Pick a task to edit."""
-        if user_input is not None:
-            self._task_id = user_input["task"]
-            return await self.async_step_task_details()
-        return self.async_show_form(
-            step_id="edit_task",
-            data_schema=vol.Schema({vol.Required("task"): _choice(self._task_choices())}),
+        return self._show_picker(
+            "edit_task",
+            self._task_choices(),
+            back="task_menu",
+            placeholders={"stage": self._stage()["name"]},
         )
 
     async def async_step_task_details(
@@ -887,40 +997,103 @@ class PlanSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Edit a task."""
         tasks = self._stage()["tasks"]
-        task = next(t for t in tasks if t["id"] == self._task_id)
+        index = next(i for i, t in enumerate(tasks) if t["id"] == self._task_id)
+        errors: dict[str, str] = {}
         if user_input is not None:
-            task.update(_task_fields(user_input))
-            return await self.async_step_task_menu()
+            fields, error = _task_fields(user_input)
+            if error:
+                errors["base"] = error
+            else:
+                # Replace rather than merge so legacy keys (e.g. "day") don't linger.
+                tasks[index] = {"id": self._task_id, **fields}
+                return await self.async_step_task_menu()
+        task = Task.from_dict(tasks[index])
+        current = {
+            "days": ", ".join(str(d) for d in task.days),
+            "every": task.every or None,
+            "until": task.until,
+            "task_type": task.task_type,
+            "title": task.title,
+            "method": task.method,
+            "note": task.note,
+        }
         return self.async_show_form(
             step_id="task_details",
-            data_schema=self.add_suggested_values_to_schema(self._task_schema(), task),
+            data_schema=self.add_suggested_values_to_schema(
+                self._task_schema(),
+                user_input or {k: v for k, v in current.items() if v not in (None, "")},
+            ),
+            errors=errors,
         )
 
     async def async_step_remove_task(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Remove tasks."""
-        if user_input is not None:
-            remove = set(user_input["tasks"])
-            stage = self._stage()
-            stage["tasks"] = [t for t in stage.get("tasks", []) if t["id"] not in remove]
-            return await self.async_step_task_menu()
-        return self.async_show_form(
-            step_id="remove_task",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("tasks"): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                selector.SelectOptionDict(value=k, label=v)
-                                for k, v in self._task_choices().items()
-                            ],
-                            multiple=True,
-                        )
-                    )
-                }
-            ),
+        """Pick a task to remove."""
+        return self._show_picker(
+            "remove_task",
+            self._task_choices(),
+            back="task_menu",
+            placeholders={"stage": self._stage()["name"]},
         )
+
+    # -- pickers ------------------------------------------------------
+    # HA forms have no Back button, so every "choose a stage or task" step is a
+    # menu with one entry per choice plus a Back entry. Each choice is a
+    # generated step "pick__<value>" that __getattr__ routes to _async_picked.
+
+    def __getattr__(self, name: str) -> Any:
+        """Provide the generated pick__<value> steps."""
+        if name.startswith("async_step_pick__"):
+            value = name.removeprefix("async_step_pick__")
+
+            async def _step(user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+                return await self._async_picked(value)
+
+            return _step
+        raise AttributeError(name)
+
+    def _show_picker(
+        self,
+        action: str,
+        choices: dict[str, str],
+        back: str,
+        placeholders: dict[str, str] | None = None,
+    ) -> SubentryFlowResult:
+        self._pick_action = action
+        options = {f"pick__{value}": label for value, label in choices.items()}
+        options[back] = BACK_LABEL
+        return self.async_show_menu(
+            step_id=action, menu_options=options, description_placeholders=placeholders
+        )
+
+    async def _async_picked(self, value: str) -> SubentryFlowResult:
+        action = self._pick_action
+        if action == "edit_stage":
+            self._stage_id = value
+            return await self.async_step_stage_basics()
+        if action == "tasks":
+            self._stage_id = value
+            return await self.async_step_task_menu()
+        if action == "remove_stage":
+            self._plan[CONF_STAGES] = [s for s in self._stages if s["id"] != value]
+            return await self.async_step_menu()
+        if action == "move_stage":
+            self._stage_id = value
+            return await self.async_step_move_to()
+        if action == "move_to":
+            stage = self._stage()
+            self._stages.remove(stage)
+            self._stages.insert(int(value) - 1, stage)
+            return await self.async_step_menu()
+        if action == "edit_task":
+            self._task_id = value
+            return await self.async_step_task_details()
+        if action == "remove_task":
+            stage = self._stage()
+            stage["tasks"] = [t for t in stage.get("tasks", []) if t["id"] != value]
+            return await self.async_step_task_menu()
+        raise ValueError(f"Unknown pick action {action}")
 
 
 def _stage_fields(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -928,18 +1101,43 @@ def _stage_fields(user_input: dict[str, Any]) -> dict[str, Any]:
         "name": user_input["name"].strip(),
         "stage_type": user_input["stage_type"],
         "days": int(user_input["days"]),
-        "target_ec": user_input.get("target_ec"),
+        "ec_min": user_input.get("ec_min"),
+        "ec_max": user_input.get("ec_max"),
         "outcome": user_input.get("outcome", ""),
     }
 
 
-def _task_fields(user_input: dict[str, Any]) -> dict[str, Any]:
+def _inverted(low: float | None, high: float | None) -> bool:
+    return low is not None and high is not None and low > high
+
+
+def _task_fields(user_input: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Validate a task form; return (fields, error key)."""
+    try:
+        days = sorted(
+            {
+                int(part)
+                for part in str(user_input["days"]).replace(";", ",").split(",")
+                if part.strip()
+            }
+        )
+    except ValueError:
+        return {}, "invalid_days"
+    if not days or days[0] < 1:
+        return {}, "invalid_days"
+    every = int(user_input.get("every") or 0)
+    until = int(user_input["until"]) if user_input.get("until") else None
+    if until is not None and (not every or until < days[0]):
+        return {}, "invalid_until"
     return {
-        "day": int(user_input["day"]),
         "task_type": user_input["task_type"],
         "title": user_input["title"].strip(),
+        "days": days,
+        "every": every,
+        "until": until,
+        "method": user_input.get("method", "").strip(),
         "note": user_input.get("note", ""),
-    }
+    }, None
 
 
 def _parse_schedule(values: dict[str, Any]) -> tuple[dict[str, Any], str | None]:

@@ -59,6 +59,10 @@ async def async_setup_entry(
         GrowBinarySensor(manager, desc) for desc in BINARY_SENSORS
     ]
     entities.extend(ScheduledOnSensor(manager, device) for device in manager.devices)
+    if manager.has_temperature_sensor:
+        entities.append(ClimateRangeSensor(manager, "temperature"))
+    if manager.has_humidity_sensor:
+        entities.append(ClimateRangeSensor(manager, "humidity"))
     async_add_entities(entities)
 
 
@@ -95,14 +99,45 @@ class ScheduledOnSensor(GrowEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         """Return the desired state; unknown when the device is unmanaged."""
-        return self.manager.desired(self.device.id)
+        return self.manager.desired(self.device)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the schedule and controlled entity."""
-        stage = self.manager.active_stage
+        schedule = self.manager.schedule_for(self.device)
         return {
             "controlled_entity": self.device.entity_id,
-            "schedule": describe(stage.schedule_for(self.device.id)) if stage else None,
-            "mode": stage.schedule_for(self.device.id).mode if stage else None,
+            "schedule": describe(schedule) if schedule else None,
+            "mode": schedule.mode if schedule else None,
+            "light": self.device.light,
         }
+
+
+class ClimateRangeSensor(GrowEntity, BinarySensorEntity):
+    """Room temperature or humidity outside the plan's range."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, manager: GrowManager, kind: str) -> None:
+        """Initialize."""
+        super().__init__(manager, f"{kind}_out_of_range")
+        self._kind = kind
+        self._attr_translation_key = f"{kind}_out_of_range"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the reading is out of range."""
+        if self._kind == "temperature":
+            return self.manager.temperature_out_of_range
+        return self.manager.humidity_out_of_range
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the reading and the plan's range."""
+        if self._kind == "temperature":
+            low, high, unit = self.manager.temperature_range
+            value = self.manager.temperature
+        else:
+            (low, high), unit = self.manager.humidity_range, "%"
+            value = self.manager.humidity
+        return {"value": value, "min": low, "max": high, "unit": unit}
