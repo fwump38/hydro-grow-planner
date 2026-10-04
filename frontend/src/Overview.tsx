@@ -1,0 +1,358 @@
+import { useEffect, useState } from "preact/hooks";
+
+import { api } from "./api";
+import { addDays, clock, dayLabel, num, shortDate, today, until } from "./format";
+import type { DeviceView, Metric, MetricView, Reading, Snapshot, StageView, TaskView } from "./types";
+import { Badge, ConfirmButton, Field, NumberInput, Switch, useAction } from "./ui";
+
+interface Props {
+  snap: Snapshot;
+  onSnap: (snap: Snapshot) => void;
+  onStart: () => void;
+}
+
+export function Overview({ snap, onSnap, onStart }: Props) {
+  if (!snap.active || !snap.stage) {
+    return (
+      <div class="card empty">
+        <h2>No grow running</h2>
+        <p class="muted">
+          Pick a template, choose the stage you're at and when it started, and the schedules and
+          tasks follow from there.
+        </p>
+        <button class="btn primary" onClick={onStart}>Start a grow</button>
+        {snap.devices.length === 0 ? (
+          <p class="muted small">Tip: add your lights and pump under Settings first.</p>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <>
+      <StageCard snap={snap} stage={snap.stage} onSnap={onSnap} onStart={onStart} />
+      <div class="grid wide">
+        <DevicesCard snap={snap} onSnap={onSnap} />
+        <WaterCard snap={snap} onSnap={onSnap} />
+      </div>
+      <TasksCard snap={snap} onSnap={onSnap} />
+    </>
+  );
+}
+
+// -- stage ---------------------------------------------------------------------------------
+
+function StageCard({ snap, stage, onSnap, onStart }: Props & { stage: StageView }) {
+  const { run, busy } = useAction();
+  const act = (a: "advance" | "previous" | "restart") => run(() => api.stageAction(snap.id, a)).then((s) => s && onSnap(s));
+  const next = snap.stages[stage.number];
+  const overdue = (stage.day ?? 0) >= stage.days;
+  return (
+    <section class="card" aria-label="Current stage">
+      <div class="row wrap between">
+        <div>
+          <h2>{snap.plan?.name}</h2>
+          <p class="muted small">
+            Stage {stage.number} of {stage.count} · grow day {snap.grow_day} · started{" "}
+            {shortDate(snap.grow_started)} · expected end {shortDate(snap.expected_end)}
+          </p>
+        </div>
+        <button class="btn" onClick={onStart}>Change grow…</button>
+      </div>
+      <div class="timeline" role="list">
+        {snap.stages.map((s, i) => {
+          const state = i + 1 < stage.number ? "done" : i + 1 === stage.number ? "current" : "";
+          const pct = state === "current" ? stage.progress ?? 0 : 0;
+          return (
+            <div role="listitem" class={`seg-stage ${state}`} style={`flex:${Math.max(s.days, 3)}`} key={s.id}>
+              <div class="bar"><i style={state === "current" ? `width:${pct}%` : ""} /></div>
+              <div class="nm" title={`${s.name} · ${s.days} days`}>{s.name}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div class="row wrap">
+        <strong>{stage.name}</strong>
+        <Badge kind="accent">day {stage.day} of {stage.days}</Badge>
+        {stage.days_remaining ? <span class="muted small">{stage.days_remaining} days left</span> : null}
+      </div>
+      {stage.outcome ? <p class="muted small">Goal: {stage.outcome}</p> : null}
+      {overdue ? (
+        <div class="callout" role="status">
+          <strong>This stage's planned time is up.</strong>
+          <span>
+            {next ? `Ready for ${next.name}? Check: ${stage.outcome || "the plants look ready"}.` : "Ready to finish the grow?"}
+            {" "}Nothing changes until you say so.
+          </span>
+          {next ? (
+            <div><button class="btn primary" disabled={busy} onClick={() => act("advance")}>Move to {next.name}</button></div>
+          ) : null}
+        </div>
+      ) : null}
+      <div class="row wrap">
+        <ConfirmButton label="Previous stage" question="Go back to the previous stage?" disabled={busy || stage.number === 1} onConfirm={() => act("previous")} />
+        <ConfirmButton label="Next stage" question={next ? `Move on to ${next.name}?` : ""} disabled={busy || !next} onConfirm={() => act("advance")} class={overdue ? "" : ""} />
+        <ConfirmButton label="Restart stage" question="Restart this stage from day 1 (today)?" disabled={busy} onConfirm={() => act("restart")} />
+        <span class="grow" />
+        <label class="row small"><Switch label="Night lighting" checked={snap.night_lighting} onChange={(v) => run(() => api.nightLighting(snap.id, v)).then((s) => s && onSnap(s))} /> Night lighting</label>
+        <label class="row small"><Switch label="Schedule control" checked={snap.schedule_enabled} onChange={(v) => run(() => api.scheduleControl(snap.id, v)).then((s) => s && onSnap(s))} /> Schedule control</label>
+      </div>
+    </section>
+  );
+}
+
+// -- devices -------------------------------------------------------------------------------
+
+function nowMinutes(): number {
+  const d = new Date();
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function DayBar({ profile }: { profile: [number, number][] }) {
+  const now = nowMinutes();
+  return (
+    <div>
+      <div class="daybar" role="img" aria-label="Scheduled on-times today">
+        {profile.map(([a, b]) => (
+          <i key={a} style={`left:${(a / 1440) * 100}%;width:${((b - a) / 1440) * 100}%`} />
+        ))}
+        <b style={`left:${(now / 1440) * 100}%`} />
+      </div>
+      <div class="dayscale"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+    </div>
+  );
+}
+
+function DevicesCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => void }) {
+  const { run, busy } = useAction();
+  if (!snap.devices.length) {
+    return (
+      <section class="card">
+        <h2>Devices</h2>
+        <p class="muted">No devices yet. Add your lights and pump under Settings.</p>
+      </section>
+    );
+  }
+  return (
+    <section class="card" aria-label="Devices">
+      <div class="row between">
+        <h2>Devices</h2>
+        <button class="btn small" disabled={busy} onClick={() => run(() => api.sync(snap.id), "Devices synced").then((s) => s && onSnap(s))}>Sync now</button>
+      </div>
+      {snap.devices.map((d) => (
+        <Device key={d.id} d={d} busy={busy} onToggle={(on) => run(() => api.switchDevice(snap.id, d.id, on)).then((s) => s && onSnap(s))} />
+      ))}
+    </section>
+  );
+}
+
+function Device({ d, busy, onToggle }: { d: DeviceView; busy: boolean; onToggle: (on: boolean) => void }) {
+  const next = until(d.next_change);
+  return (
+    <div class="stack" style="gap:6px">
+      <div class="row">
+        <div class="grow">
+          <strong>{d.name}</strong>
+          <div class="muted small">
+            {d.schedule ?? "Not managed"}
+            {next && d.desired !== null ? ` · ${d.desired ? "off" : "on"} in ${next}` : ""}
+          </div>
+        </div>
+        {d.override ? <Badge kind="warn">manual override</Badge> : null}
+        {d.state === null ? <Badge>unavailable</Badge> : null}
+        <Switch label={`${d.name} power`} checked={d.state === true} disabled={busy || d.state === null} onChange={onToggle} />
+      </div>
+      {d.profile && d.mode && d.mode !== "manual" ? <DayBar profile={d.profile} /> : null}
+    </div>
+  );
+}
+
+// -- water and climate ---------------------------------------------------------------------------
+
+const LABELS: Record<Metric, string> = { ph: "pH", ec: "EC", temperature: "Temperature", humidity: "Humidity" };
+
+function Band({ m }: { m: MetricView }) {
+  if (m.value === null || m.min === null || m.max === null) return null;
+  const span = Math.max(m.max - m.min, 0.0001);
+  const lo = m.min - span * 0.8;
+  const hi = m.max + span * 0.8;
+  const pos = (v: number) => Math.min(100, Math.max(0, ((v - lo) / (hi - lo)) * 100));
+  return (
+    <div class="band" aria-hidden="true">
+      <div class="target" style={`left:${pos(m.min)}%;width:${pos(m.max) - pos(m.min)}%`} />
+      <div class={`dot ${m.out_of_range ? "bad" : ""}`} style={`left:${pos(m.value)}%`} />
+    </div>
+  );
+}
+
+function MetricTile({ metric, m }: { metric: Metric; m: MetricView }) {
+  return (
+    <div class="metric">
+      <div class="row between">
+        <span class="muted small">{LABELS[metric]}</span>
+        {m.out_of_range === true ? <Badge kind="bad">out of range</Badge> : m.out_of_range === false ? <Badge kind="ok">in range</Badge> : null}
+      </div>
+      <div class="value">{m.value === null ? "—" : num(m.value, 2)}<span class="muted small"> {m.unit ?? ""}</span></div>
+      <Band m={m} />
+      <div class="muted small">{m.range ? `Target ${m.range}${m.unit ? " " + m.unit : ""}` : "No target range"}</div>
+    </div>
+  );
+}
+
+function Spark({ points, label }: { points: number[]; label: string }) {
+  if (points.length < 2) return null;
+  const lo = Math.min(...points);
+  const hi = Math.max(...points);
+  const span = hi - lo || 1;
+  const d = points.map((v, i) => `${i ? "L" : "M"}${(i / (points.length - 1)) * 100},${44 - ((v - lo) / span) * 40}`).join(" ");
+  return (
+    <svg class="spark" viewBox="0 0 100 48" preserveAspectRatio="none" role="img" aria-label={label}>
+      <path d={d} fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function WaterCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => void }) {
+  const { run, busy } = useAction();
+  const [ph, setPh] = useState<number | null>(null);
+  const [ec, setEc] = useState<number | null>(null);
+  const [readings, setReadings] = useState<Reading[]>([]);
+  const m = snap.metrics;
+  useEffect(() => {
+    api.readings(snap.id).then((r) => setReadings(r.readings)).catch(() => {});
+  }, [snap.id, snap.last_reading, snap.ec_unit]);
+
+  const manualPh = !m.ph.from_sensor;
+  const manualEc = !m.ec.from_sensor;
+  const record = async () => {
+    const result = await run(() => api.record(snap.id, { ph, ec }), "Reading recorded");
+    if (result) {
+      onSnap(result);
+      setPh(null);
+      setEc(null);
+    }
+  };
+  const phs = readings.flatMap((r) => (r.ph === null ? [] : [r.ph]));
+  const ecs = readings.flatMap((r) => (r.ec === null ? [] : [r.ec]));
+  return (
+    <section class="card" aria-label="Water and climate">
+      <h2>Water &amp; climate</h2>
+      <div class="cols2">
+        {(["ph", "ec", "temperature", "humidity"] as Metric[]).map((k) => (
+          <MetricTile key={k} metric={k} m={m[k]} />
+        ))}
+      </div>
+      {phs.length > 1 || ecs.length > 1 ? (
+        <div class="cols2">
+          <div><div class="muted small">pH, last 14 days</div><Spark points={phs} label="pH history" /></div>
+          <div><div class="muted small">EC, last 14 days</div><Spark points={ecs} label="EC history" /></div>
+        </div>
+      ) : null}
+      {manualPh || manualEc ? (
+        <form
+          class="stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            record();
+          }}
+        >
+          <div class="cols2">
+            {manualPh ? (
+              <Field label="pH">
+                <NumberInput value={ph} onChange={setPh} step="0.1" min={0} max={14} placeholder={m.ph.value === null ? "e.g. 6.0" : String(m.ph.value)} ariaLabel="pH value" />
+              </Field>
+            ) : null}
+            {manualEc ? (
+              <Field label={`EC (${snap.ec_unit})`} hint={m.ec.range ? `Target ${m.ec.range}` : undefined}>
+                <NumberInput value={ec} onChange={setEc} min={0} placeholder={m.ec.value === null ? "" : String(m.ec.value)} ariaLabel="EC value" />
+              </Field>
+            ) : null}
+          </div>
+          <div class="row wrap">
+            <button class="btn primary" type="submit" disabled={busy || (ph === null && ec === null)}>Record</button>
+            <button class="btn" type="button" disabled={busy} onClick={() => run(() => api.waterChecked(snap.id), "Marked as checked").then((s) => s && onSnap(s))}>Water checked</button>
+            <span class="grow" />
+            <span class="muted small">
+              {snap.last_reading ? `Last: ${dayLabel(snap.last_reading.slice(0, 10))}` : "No readings yet"}
+            </span>
+            {snap.reading_overdue ? <Badge kind="warn">reading overdue</Badge> : null}
+          </div>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+// -- tasks ---------------------------------------------------------------------------------------
+
+function TaskRow({ t, onToggle, onDelete }: { t: TaskView; onToggle: () => void; onDelete: () => void }) {
+  return (
+    <div class={`task ${t.done ? "done" : ""}`}>
+      <input type="checkbox" checked={t.done} onChange={onToggle} aria-label={`${t.done ? "Reopen" : "Complete"} ${t.title}`} />
+      <div class="grow">
+        <div class="row wrap" style="gap:6px">
+          <span class="title">{t.title}</span>
+          {t.every ? <Badge>every {t.every} {t.every === 1 ? "day" : "days"}</Badge> : null}
+          {t.overdue ? <Badge kind="bad">overdue</Badge> : null}
+        </div>
+        <div class="muted small">{dayLabel(t.due)}</div>
+        {t.note && !t.done ? <details class="small"><summary class="muted">Details</summary><div class="note">{t.note}</div></details> : null}
+      </div>
+      <button class="icon-btn" aria-label={`Delete ${t.title}`} title="Delete" onClick={onDelete}>✕</button>
+    </div>
+  );
+}
+
+function TasksCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => void }) {
+  const { run, busy } = useAction();
+  const [title, setTitle] = useState("");
+  const [every, setEvery] = useState<number | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  const t0 = today();
+  const open = snap.tasks.filter((t) => !t.done);
+  const groups: [string, TaskView[]][] = [
+    ["Overdue", open.filter((t) => t.due < t0)],
+    ["Today", open.filter((t) => t.due === t0)],
+    ["Next 7 days", open.filter((t) => t.due > t0 && t.due <= addDays(t0, 7))],
+    ["Later", open.filter((t) => t.due > addDays(t0, 7))],
+  ];
+  const done = snap.tasks.filter((t) => t.done);
+  const apply = (action: () => Promise<Snapshot>) => run(action).then((s) => s && onSnap(s));
+  const toggle = (t: TaskView) => apply(() => (t.done ? api.reopenTask(snap.id, t.id) : api.completeTask(snap.id, t.id)));
+  return (
+    <section class="card" aria-label="Tasks">
+      <h2>Tasks</h2>
+      {open.length === 0 ? <p class="muted">Nothing to do. Nice.</p> : null}
+      {groups.map(([name, items]) =>
+        items.length ? (
+          <div key={name}>
+            <h3 class="muted small" style="margin:6px 0 2px">{name}</h3>
+            {items.map((t) => <TaskRow key={t.id} t={t} onToggle={() => toggle(t)} onDelete={() => apply(() => api.deleteTask(snap.id, t.id))} />)}
+          </div>
+        ) : null,
+      )}
+      {done.length ? (
+        <div>
+          <button class="btn ghost small" onClick={() => setShowDone(!showDone)}>{showDone ? "Hide" : "Show"} {done.length} done</button>
+          {showDone ? done.map((t) => <TaskRow key={t.id} t={t} onToggle={() => toggle(t)} onDelete={() => apply(() => api.deleteTask(snap.id, t.id))} />) : null}
+        </div>
+      ) : null}
+      <form
+        class="row wrap"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!title.trim()) return;
+          apply(() => api.addTask(snap.id, { title, every: every ?? 0 })).then(() => {
+            setTitle("");
+            setEvery(null);
+          });
+        }}
+      >
+        <input type="text" class="grow" style="min-width:160px" placeholder="Add a task" aria-label="New task" value={title} onInput={(e) => setTitle((e.currentTarget as HTMLInputElement).value)} />
+        <span class="row small muted">repeat every <span style="width:64px"><NumberInput value={every} onChange={setEvery} min={0} step={1} placeholder="–" ariaLabel="Repeat every N days" /></span> days</span>
+        <button class="btn" type="submit" disabled={busy || !title.trim()}>Add</button>
+      </form>
+    </section>
+  );
+}
+
+export { clock };

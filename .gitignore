@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Frontend
+frontend/node_modules/
+backend/grow_planner/static/
+
+# Local dev data (state.json, readings.sqlite from running the app standalone)
+data/

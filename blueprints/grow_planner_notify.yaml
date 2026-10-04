@@ -1,0 +1,67 @@
+blueprint:
+  name: Grow Planner - notify about grow tasks
+  description: >
+    Sends a notification when Hydro Grow Planner reports tasks due, a stage is ready to
+    check, or a water reading is overdue. You choose how to notify (phone, speaker, ...);
+    the action you add can use {{ title }} and {{ message }}.
+  domain: automation
+  input:
+    notify_action:
+      name: Notification action
+      description: >
+        What to do with the notification. Example: notify.mobile_app_your_phone with
+        title {{ title }} and message {{ message }}.
+      selector:
+        action: {}
+    tasks_due:
+      name: Tasks due
+      default: true
+      selector:
+        boolean: {}
+    stage_complete:
+      name: Stage is ready to check
+      default: true
+      selector:
+        boolean: {}
+    reading_overdue:
+      name: Water reading overdue
+      default: true
+      selector:
+        boolean: {}
+
+triggers:
+  - trigger: event
+    event_type: hydro_grow_planner_tasks_due
+    id: tasks_due
+  - trigger: event
+    event_type: hydro_grow_planner_stage_complete_due
+    id: stage_complete
+  - trigger: event
+    event_type: hydro_grow_planner_reading_overdue
+    id: reading_overdue
+
+variables:
+  want_tasks: !input tasks_due
+  want_stage: !input stage_complete
+  want_reading: !input reading_overdue
+
+conditions:
+  - condition: template
+    value_template: >
+      {{ (trigger.id == 'tasks_due' and want_tasks)
+         or (trigger.id == 'stage_complete' and want_stage)
+         or (trigger.id == 'reading_overdue' and want_reading) }}
+
+actions:
+  - variables:
+      title: >
+        {% if trigger.id == 'tasks_due' %}{{ trigger.event.data.system }}: {{ trigger.event.data.count }} to do
+        {% elif trigger.id == 'stage_complete' %}{{ trigger.event.data.system }}: {{ trigger.event.data.stage }} is done?
+        {% else %}{{ trigger.event.data.system }}: water reading due{% endif %}
+      message: >
+        {% if trigger.id == 'tasks_due' %}{% for t in trigger.event.data.tasks %}{{ '• ' ~ t.title ~ (' (overdue)' if t.overdue else '') }}
+        {% endfor %}
+        {% elif trigger.id == 'stage_complete' %}Ready for {{ trigger.event.data.next_stage or 'the end of the grow' }}? It never changes by itself.
+        {% else %}Last reading: {{ trigger.event.data.last_reading or 'never' }}.{% endif %}
+  - choose: []
+    default: !input notify_action

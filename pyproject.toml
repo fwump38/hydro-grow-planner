@@ -2,6 +2,7 @@
 name = "hydro-grow-planner"
 version = "0.1.0"
 requires-python = ">=3.13"
+description = "Home Assistant app for planning and running hydroponic grows"
 
 [tool.ruff]
 line-length = 100
@@ -13,9 +14,13 @@ ignore = ["E501"]
 
 [tool.ruff.lint.isort]
 force-sort-within-sections = true
-known-first-party = ["custom_components"]
+known-first-party = ["grow_planner"]
 combine-as-imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["backend/tests"]
+# Keep a stray pytest-homeassistant-custom-component install (it blocks sockets) out of
+# the way; harmless when it is not installed.
+addopts = "-p no:homeassistant -p no:socket"
+pythonpath = ["backend"]

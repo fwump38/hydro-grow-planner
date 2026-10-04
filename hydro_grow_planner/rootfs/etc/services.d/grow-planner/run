@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+cd /opt/grow_planner || exit 1
+bashio::log.info "Starting Hydro Grow Planner"
+exec /opt/venv/bin/python -m grow_planner

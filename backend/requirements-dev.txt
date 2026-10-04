@@ -1,0 +1,6 @@
+pytest>=8
+pytest-asyncio>=0.24
+pytest-aiohttp>=1.0
+pytest-timeout>=2.3
+ruff
+-r requirements.txt
