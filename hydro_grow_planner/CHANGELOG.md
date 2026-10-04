@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Publish the app image under the plain version tag the Supervisor pulls (0.3.0 was tagged `v0.3.0`, which it can't find).
+
 ## 0.3.0
 
 Rebuilt as a Home Assistant app, replacing the custom integration.
