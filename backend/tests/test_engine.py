@@ -400,9 +400,10 @@ async def test_snapshot_shape(h: Harness) -> None:
     assert snap["metrics"]["ec"]["range"] == "600–1000"  # 1.2-2.0 mS/cm in ppm 500
     assert snap["metrics"]["ec"]["out_of_range"] is False
     assert snap["metrics"]["ph"]["range"] == "5.8–6.5"
-    assert snap["metrics"]["humidity"]["range"] == "50–70"
+    assert snap["metrics"]["humidity"]["range"] == "40–70"
     pump = next(d for d in snap["devices"] if d["id"] == "d_pump")
-    assert pump["mode"] == "always_on" and pump["profile"] == [(0, 1440)]
+    assert pump["mode"] == "interval" and pump["schedule"] == "15 min every 3 h"
+    assert len(pump["profile"]) == 8 and pump["profile"][:2] == [(0, 15), (180, 195)]
     assert snap["tasks_due"] >= 3
 
 
@@ -434,7 +435,7 @@ async def test_preview_start_changes_nothing_and_describes_the_result(h: Harness
     assert all(t["due"] == TODAY.isoformat() for t in preview["tasks"] if t["recurring"])
     assert "Vegetative" in preview["skipped_tasks"]  # the day-1 info task already passed
     pump = next(d for d in preview["devices"] if d["name"] == "Water pump")
-    assert pump["desired"] is True  # always on in Vegetative
+    assert pump["desired"] is True  # 12:00 falls inside a run (the pump cycles from midnight)
 
     with_past = h.system.preview_start("Leafy Greens", 3, started, include_past_tasks=True)
     assert "Vegetative" in {t["title"] for t in with_past["tasks"]}

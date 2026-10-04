@@ -131,7 +131,7 @@ async def test_mqtt_command_errors_are_contained(app: App) -> None:
 async def test_reconnect_resyncs_and_subscribes_to_todo(app: App) -> None:
     system = configure(app)
     app.on_ha_state("switch.pump", EntityState("off"))
-    await system.start_grow("Leafy Greens", stage_ref=3)  # pump always on
+    await system.start_grow("Leafy Greens", stage_ref=3)  # 12:00 is inside a pump run: on
     app.on_ha_state("switch.pump", EntityState("off"))  # something turned it off meanwhile
     app.ha.calls.clear()
     await app.on_ha_connected()

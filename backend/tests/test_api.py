@@ -80,7 +80,9 @@ async def test_start_wizard_flow_mid_cycle(api) -> None:
     assert started["active"] and started["stage"]["name"] == "Vegetative"
     assert started["stage"]["day"] == 11 and started["grow_day"] == 25
     assert any(t["title"] == "Add nutrients" for t in started["tasks"])
-    assert started["devices"][0]["profile"] == [[0, 1440]]  # pump is always on in Vegetative
+    # The pump runs 15 min every 3 h: eight runs a day.
+    pump = started["devices"][0]["profile"]
+    assert len(pump) == 8 and pump[0] == [0, 15] and pump[1] == [180, 195]
 
     ended = await post(api, f"{api.base}/grow/end")
     assert ended["active"] is False
@@ -182,7 +184,7 @@ async def test_plan_from_template_with_role_mapping(api) -> None:
 async def test_templates_browse_duplicate_edit_delete(api) -> None:
     cards = await (await api.get("/api/templates")).json()
     leafy = next(c for c in cards if c["id"] == "builtin:leafy_greens")
-    assert leafy["builtin"] and leafy["ph"] == "5.8–6.5" and leafy["humidity"] == "50–70"
+    assert leafy["builtin"] and leafy["ph"] == "5.8–6.5" and leafy["humidity"] == "40–70"
     assert leafy["ec"] == "0–2" and leafy["stage_count"] == 3 and leafy["total_days"] == 104
     detail = await (await api.get("/api/templates/builtin:leafy_greens")).json()
     assert detail["builtin"] and detail["stages"][2]["tasks"][1]["every"] == 3

@@ -4,11 +4,16 @@ The PRESETS literal was generated from the app's built-in templates; do not edit
 by hand. Hand-made changes live in the `_PATCHES` section at the end of this file
 and are applied on import, so they are easy to audit:
 
-- humidity ranges for every template (Elfsys has none)
+- humidity ranges for every template (Elfsys has none): 50-70 %, except Leafy Greens at
+  40-70 % because it is also used for herbs, which prefer drier air
 - generic pH, temperature and EC ranges for Leafy Greens
 - a temperature range for Spinach
 - Leafy Greens "every 3 days" tasks are real recurring tasks (the source only had
   the wording in the title)
+- Leafy Greens Vegetative runs the pump 15 min every 3 h like every other stage
+  (the source had it always on)
+- Leafy Greens light schedules follow the Lettuce/Spinach pattern (the source had 15 h
+  of side light while sprouting, both lights in Seedling, and 17 h in Vegetative)
 
 Schedules are keyed by role (see presets.py). Days are 1-based.
 """
@@ -2452,6 +2457,7 @@ _HUMIDITY = (50.0, 70.0)
 
 # Generic leafy greens/herbs values, in °F and mS/cm.
 _LEAFY_GREENS_RANGES = {"ph_min": 5.8, "ph_max": 6.5, "temp_min": 65.0, "temp_max": 75.0}
+_LEAFY_GREENS_HUMIDITY = (40.0, 70.0)  # herbs prefer drier air than lettuce
 _LEAFY_GREENS_EC = {"Sprouting": (0.0, 0.5), "Seedling": (0.6, 1.2), "Vegetative": (1.2, 2.0)}
 _LEAFY_GREENS_REPEATING = {
     "Move the grow lights (every 3 days)",
@@ -2460,18 +2466,44 @@ _LEAFY_GREENS_REPEATING = {
 }
 
 
+def _window(on: str, off: str) -> dict[str, str]:
+    return {"mode": "time_window", "on_time": on, "off_time": off}
+
+
 def _apply_patches() -> None:
     for preset in PRESETS.values():
         preset["humidity_min"], preset["humidity_max"] = _HUMIDITY
 
     leafy = PRESETS["leafy_greens"]
     leafy.update(_LEAFY_GREENS_RANGES, temp_unit="°F")
+    leafy["humidity_min"], leafy["humidity_max"] = _LEAFY_GREENS_HUMIDITY
     for stage in leafy["stages"]:
         stage["ec_min"], stage["ec_max"] = _LEAFY_GREENS_EC[stage["name"]]
         for task in stage["tasks"]:
             if task["title"] in _LEAFY_GREENS_REPEATING:
                 task["title"] = task["title"].removesuffix(" (every 3 days)")
                 task["every"] = 3
+
+    # Same light pattern as Lettuce and Spinach: side lights only while sprouting, center
+    # lights only as seedlings, then both for 14 h.
+    leafy_lights = {
+        "Sprouting": (_window("11:30:00", "16:30:00"), {"mode": "off"}),
+        "Seedling": ({"mode": "off"}, _window("10:00:00", "18:00:00")),
+        "Vegetative": (_window("07:00:00", "21:00:00"), _window("07:00:00", "21:00:00")),
+    }
+    for stage in leafy["stages"]:
+        side, center = leafy_lights[stage["name"]]
+        stage["schedules"]["side_lights"] = dict(side)
+        stage["schedules"]["center_lights"] = dict(center)
+
+    # Every other stage of every template runs the pump 15 min every 3 h.
+    for stage in leafy["stages"]:
+        if stage["schedules"]["water_pump"]["mode"] == "always_on":
+            stage["schedules"]["water_pump"] = {
+                "mode": "interval",
+                "interval_on": 900,
+                "interval_every": 10800,
+            }
 
     spinach = PRESETS["spinach"]
     spinach.update(temp_min=60.0, temp_max=70.0, temp_unit="°F")

@@ -60,3 +60,36 @@ def test_leafy_greens_vegetative_tasks_repeat() -> None:
         "Add nutrients": 3,
         "Add water if needed": 3,
     }
+
+
+@pytest.mark.parametrize("key", sorted(PRESETS))
+def test_pump_runs_15_minutes_every_3_hours_in_every_stage(key: str) -> None:
+    # Every built-in stage uses this cycle; an always-on pump is a data error.
+    for stage in PRESETS[key]["stages"]:
+        pump = stage["schedules"]["water_pump"]
+        assert pump == {"mode": "interval", "interval_on": 900, "interval_every": 10800}, (
+            key,
+            stage["name"],
+        )
+
+
+def test_leafy_greens_lights_follow_the_lettuce_and_spinach_pattern() -> None:
+    # The source's generic template had 15 h of side light while sprouting, both lights
+    # in Seedling and 17 h in Vegetative. It now matches the other leafy templates.
+    lights = lambda key: [  # noqa: E731
+        (s["name"], s["schedules"]["center_lights"], s["schedules"]["side_lights"])
+        for s in PRESETS[key]["stages"]
+    ]
+    assert lights("leafy_greens") == lights("lettuce")
+    sprouting, seedling, vegetative = PRESETS["leafy_greens"]["stages"]
+    assert sprouting["schedules"]["center_lights"]["mode"] == "off"
+    assert seedling["schedules"]["side_lights"]["mode"] == "off"
+    assert vegetative["schedules"]["center_lights"]["on_time"] == "07:00:00"
+    assert vegetative["schedules"]["center_lights"]["off_time"] == "21:00:00"
+
+
+def test_leafy_greens_humidity_is_wide_enough_for_herbs() -> None:
+    leafy = PRESETS["leafy_greens"]
+    assert (leafy["humidity_min"], leafy["humidity_max"]) == (40.0, 70.0)
+    # The leafy-vegetable templates keep the tighter 50-70 % range.
+    assert (PRESETS["lettuce"]["humidity_min"], PRESETS["lettuce"]["humidity_max"]) == (50.0, 70.0)

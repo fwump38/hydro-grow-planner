@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2
+
+- Leafy Greens template: the pump now runs 15 min every 3 h in Vegetative like every other stage
+  (it was always on).
+- Leafy Greens template: lights follow the Lettuce/Spinach pattern (side lights only while sprouting,
+  center lights only as seedlings, both for 14 h in Vegetative) instead of 15 h of light while
+  sprouting and 17 h in Vegetative.
+- Leafy Greens template: humidity target widened to 40–70 % (herbs prefer drier air than lettuce).
+- A plan you already started keeps the schedule it was created with; edit it under Plan to apply the
+  new values.
+
 ## 0.3.1
 
 - Publish the app image under the plain version tag the Supervisor pulls (0.3.0 was tagged `v0.3.0`, which it can't find).

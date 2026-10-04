@@ -57,7 +57,7 @@ plans as a template, and import/export JSON.
 
 Every built-in template has a pH, temperature and humidity range and an EC range for every stage, so
 the out-of-range alerts are useful from day one. *Leafy Greens* uses generic values that suit most
-leafy greens and herbs (pH 5.8–6.5, 65–75 °F, 50–70 % humidity, EC 0.0–2.0 mS/cm by stage).
+leafy greens and herbs (pH 5.8–6.5, 65–75 °F, 40–70 % humidity so herbs fit too, EC 0.0–2.0 mS/cm by stage).
 
 ### Starting mid-grow
 
