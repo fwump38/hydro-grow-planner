@@ -19,6 +19,8 @@ switches, lights, fans or input booleans.
 
 ## Install
 
+[![Open your Home Assistant instance and show the add app repository dialog with this repository pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Ffwump38%2Fhydro-grow-planner)
+
 1. **Settings → Apps → Install app → ⋮ → Repositories**, add
    `https://github.com/fwump38/hydro-grow-planner`.
 2. Install **Hydro Grow Planner** and start it.
