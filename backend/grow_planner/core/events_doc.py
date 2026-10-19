@@ -18,6 +18,7 @@ from .const import (
 )
 
 COMMON = {"system_id": "abc123", "system": "Grow System"}
+GROW = {"grow_id": "d4e5f6a7", "grow": "Layers 1+2"}
 
 EVENTS: list[dict[str, Any]] = [
     {
@@ -35,6 +36,7 @@ EVENTS: list[dict[str, Any]] = [
                     "due": "2026-09-20",
                     "overdue": False,
                     "recurring": True,
+                    "grow": "Layers 1+2",
                 }
             ],
         },
@@ -43,6 +45,7 @@ EVENTS: list[dict[str, Any]] = [
         "event": EVENT_STAGE_COMPLETE_DUE,
         "when": "Once, when a stage reaches its planned length. The stage never changes by itself.",
         "example": {
+            **GROW,
             "plan": "Leafy Greens",
             "stage": "Sprouting",
             "next_stage": "Seedling",
@@ -67,17 +70,18 @@ EVENTS: list[dict[str, Any]] = [
     {
         "event": EVENT_TASK_CREATED,
         "when": "A repeating or custom task gets a new occurrence.",
-        "example": {"task": "Add nutrients", "due": "2026-09-23"},
+        "example": {**GROW, "task": "Add nutrients", "due": "2026-09-23"},
     },
     {
         "event": EVENT_TASK_COMPLETED,
         "when": "A task is checked off, in the panel or in Home Assistant.",
-        "example": {"task": "Add nutrients", "next_due": "2026-09-23"},
+        "example": {**GROW, "task": "Add nutrients", "next_due": "2026-09-23"},
     },
     {
         "event": EVENT_STAGE_CHANGED,
         "when": "The stage changes (always by hand).",
         "example": {
+            **GROW,
             "plan": "Leafy Greens",
             "stage": "Seedling",
             "stage_number": 2,
@@ -89,12 +93,17 @@ EVENTS: list[dict[str, Any]] = [
     {
         "event": EVENT_GROW_STARTED,
         "when": "A grow is started.",
-        "example": {"plan": "Leafy Greens", "stage": "Sprouting", "stage_started": "2026-09-20"},
+        "example": {
+            **GROW,
+            "plan": "Leafy Greens",
+            "stage": "Sprouting",
+            "stage_started": "2026-09-20",
+        },
     },
     {
         "event": EVENT_GROW_ENDED,
         "when": "A grow is ended.",
-        "example": {"plan": "Leafy Greens"},
+        "example": {**GROW, "plan": "Leafy Greens"},
     },
 ]
 

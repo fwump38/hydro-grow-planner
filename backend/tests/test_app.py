@@ -120,12 +120,12 @@ async def test_state_changes_reach_systems_and_fire_alerts(app: App) -> None:
 
 async def test_mqtt_command_errors_are_contained(app: App) -> None:
     system = configure(app)
-    await app.on_mqtt_command(system.id, "next_stage", "PRESS")  # no grow running
+    await app.on_mqtt_command(system.id, "grow_nope_next_stage", "PRESS")  # no such grow
     await app.on_mqtt_command(system.id, "record_ph", "abc")
-    await app.on_mqtt_command("missing", "next_stage", "PRESS")
+    await app.on_mqtt_command("missing", "sync_devices", "PRESS")
     app.on_ha_state("switch.pump", EntityState("off"))
-    await app.on_mqtt_command(system.id, "active_plan", "Leafy Greens")
-    assert system.is_active
+    await app.on_mqtt_command(system.id, "sync_devices", "PRESS")
+    assert not system.is_active
 
 
 async def test_reconnect_resyncs_and_subscribes_to_todo(app: App) -> None:
@@ -151,7 +151,7 @@ async def test_state_survives_a_restart(app: App, tmp_path: Path) -> None:
     again = App(store, FakeConnection(), FakeReadings(), FakeMqtt(), app.clock)
     again.load()
     restored = next(iter(again.systems.values()))
-    assert restored.active_stage.name == "Seedling"
+    assert restored.grow().stage.name == "Seedling"
     assert any(t["title"] == "Buy filters" and t["every"] == 14 for t in restored.task_items())
 
 

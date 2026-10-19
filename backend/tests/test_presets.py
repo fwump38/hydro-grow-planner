@@ -93,3 +93,42 @@ def test_leafy_greens_humidity_is_wide_enough_for_herbs() -> None:
     assert (leafy["humidity_min"], leafy["humidity_max"]) == (40.0, 70.0)
     # The leafy-vegetable templates keep the tighter 50-70 % range.
     assert (PRESETS["lettuce"]["humidity_min"], PRESETS["lettuce"]["humidity_max"]) == (50.0, 70.0)
+
+
+def test_mixed_herbs_is_leafy_greens_tuned_for_a_shared_herb_reservoir() -> None:
+    herbs, leafy = PRESETS["mixed_herbs"], PRESETS["leafy_greens"]
+    assert herbs["name"] == "Mixed Herbs"
+    # pH sits where basil (<= 6.5) and cilantro/alliums/bok choy (>= 6.0) overlap.
+    assert (herbs["ph_min"], herbs["ph_max"]) == (6.0, 6.5)
+    assert [s["name"] for s in herbs["stages"]] == [s["name"] for s in leafy["stages"]]
+    assert herbs["stages"][0]["days"] > leafy["stages"][0]["days"]  # slower to sprout
+    # A copy, not an alias: editing one must not change the other.
+    assert herbs["stages"][0]["tasks"] is not leafy["stages"][0]["tasks"]
+    assert (leafy["ph_min"], leafy["ph_max"]) == (5.8, 6.5)
+    vegetative = {t["title"]: t for t in herbs["stages"][2]["tasks"]}
+    assert vegetative["Pinch and harvest herbs"]["every"] == 7
+    assert vegetative["Sow cilantro again"]["until"] <= herbs["stages"][2]["days"]
+
+
+def test_a_role_can_drive_several_devices() -> None:
+    role_map = {
+        "center_lights": ["plug_a", "plug_b"],
+        "side_lights": "plug_c",
+        "water_pump": [],
+    }
+    plan = build_from_preset("leafy_greens", role_map, new_id)
+    schedules = plan["stages"][2]["schedules"]
+    assert set(schedules) == {"plug_a", "plug_b", "plug_c"}
+    assert schedules["plug_a"] == schedules["plug_b"]
+    assert schedules["plug_a"] is not schedules["plug_b"]  # separate copies
+
+
+def test_saving_a_plan_with_shared_roles_as_a_template_keeps_one_schedule_per_role() -> None:
+    from grow_planner.core.presets import plan_to_template
+
+    role_map = {"center_lights": ["plug_a", "plug_b"], "side_lights": "plug_c"}
+    plan = build_from_preset("leafy_greens", role_map, new_id)
+    template = plan_to_template(
+        plan, {"plug_a": "center_lights", "plug_b": "center_lights", "plug_c": "side_lights"}
+    )
+    assert set(template["stages"][2]["schedules"]) == {"center_lights", "side_lights"}

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0
+
+- **Several grows at once.** A system can run more than one plan, e.g. one for layers 1+2 and another for
+  layers 3+4. They share the reservoir, pump, sensors and room; each has its own plan, stage, start date,
+  tasks and lights. Add one with **Overview → Add a grow…**. Existing grows carry over unchanged.
+  - A device two grows schedule (normally the pump) is on whenever either wants it on.
+  - pH, EC, temperature and humidity targets are where the grows' ranges overlap; if they don't, the oldest
+    grow's range is used and the panel says so.
+- **Night lighting is per grow**, not per system.
+- **Tasks are tagged with their grow**, in the panel and in the to-do list (once there is more than one grow).
+  Tasks you add can be for one grow or all.
+- **A template role can drive several devices.** The wizard lets you tick more than two lights, and skips
+  lights another grow already runs.
+- New **Mixed Herbs** template for basil, cilantro, scallions/chives and bok choy on one reservoir.
+- The pH box accepts two decimals (6.25).
+- **Breaking:** plan, stage, grow day, and the plan/stage selects, night lighting switch and stage buttons are
+  now per-grow entities named after the grow (e.g. `sensor.grow_system_layers_1_2_stage_day`); the old
+  single-grow entity IDs are removed. Update automations that use them. API: `/grow/*`, `/stage*` and
+  `/night-lighting` became `/grows`, `/grows/{id}` and `/grows/{id}/stage*`. Events gain `grow` and
+  `grow_id`.
+
 ## 0.3.2
 
 - Leafy Greens template: the pump now runs 15 min every 3 h in Vegetative like every other stage

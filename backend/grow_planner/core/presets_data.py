@@ -14,10 +14,13 @@ and are applied on import, so they are easy to audit:
   (the source had it always on)
 - Leafy Greens light schedules follow the Lettuce/Spinach pattern (the source had 15 h
   of side light while sprouting, both lights in Seedling, and 17 h in Vegetative)
+- Mixed Herbs is not an Elfsys template: it is derived from Leafy Greens for basil,
+  cilantro, scallions/chives and bok choy sharing one reservoir (see `_mixed_herbs`)
 
 Schedules are keyed by role (see presets.py). Days are 1-based.
 """
 
+from copy import deepcopy
 from typing import Any
 
 PRESETS: dict[str, dict[str, Any]] = {
@@ -2507,6 +2510,91 @@ def _apply_patches() -> None:
 
     spinach = PRESETS["spinach"]
     spinach.update(temp_min=60.0, temp_max=70.0, temp_unit="°F")
+
+    PRESETS["mixed_herbs"] = _mixed_herbs(leafy)
+
+
+def _task(title: str, note: str, days: list[int], every: int = 0, until: int | None = None):
+    return {
+        "task_type": "reminder",
+        "title": title,
+        "method": "",
+        "note": note,
+        "days": days,
+        "every": every,
+        "until": until,
+    }
+
+
+def _mixed_herbs(leafy: dict[str, Any]) -> dict[str, Any]:
+    """Return a template for herbs and alliums that share one reservoir.
+
+    Built for basil, cilantro, scallions or chives and bok choy together, so every
+    range is where those plants overlap: pH 6.0-6.5 (basil tops out at 6.5, cilantro
+    and the alliums want 6.0 or more), 65-75 °F, and a middling EC that suits basil
+    without starving bok choy. Germination is slower and more uneven than lettuce,
+    so the early stages are longer, and herbs are cut often, not harvested once.
+    """
+    herbs = deepcopy(leafy)
+    herbs.update(name="Mixed Herbs", ph_min=6.0, ph_max=6.5, temp_min=65.0, temp_max=75.0)
+    herbs["humidity_min"], herbs["humidity_max"] = 40.0, 65.0
+    sprouting, seedling, vegetative = herbs["stages"]
+    sprouting.update(days=10, ec_min=0.0, ec_max=0.6)
+    seedling.update(days=14, ec_min=0.8, ec_max=1.4)
+    vegetative.update(days=60, ec_min=1.2, ec_max=1.8)
+    sprouting["outcome"] = (
+        "Most pots have sprouted. Cilantro, scallions and chives are slower than basil "
+        "and bok choy, so give them until the end of the stage."
+    )
+    seedling["outcome"] = "Observable roots at the bottom of the net pot"
+
+    for task in sprouting["tasks"]:
+        if task["title"] == "Spray water on the clay pebbles":
+            task["until"] = 10
+        elif task["title"] == "Look for germination":
+            task["days"] = [4, 8]
+            task["note"] += (
+                " Basil and bok choy usually sprout within a week; cilantro, scallions "
+                "and chives can take two."
+            )
+    sprouting["tasks"].insert(
+        2,
+        _task(
+            "Plant each herb in its own pots",
+            "Keep each herb together, grouped by how tall it grows, so the taller "
+            "ones (basil, bok choy) don't shade the shorter ones (chives, scallions). "
+            "Put the thirstiest plants nearest the drain. Sow 2-3 seeds per pot; "
+            "cilantro and scallion seeds benefit from a day's soak first.",
+            [1],
+        ),
+    )
+
+    vegetative["tasks"] += [
+        _task(
+            "Pinch and harvest herbs",
+            "Cut basil above a leaf pair and never take more than a third at once, and "
+            "pinch off any flower buds. Cut scallions, chives and cilantro an inch or "
+            "two above the pot. Harvest bok choy as whole heads or outer leaves.",
+            [14],
+            every=7,
+        ),
+        _task(
+            "Check for bolting",
+            "Cilantro and scallions bolt (send up a flower stalk) when it is warm or "
+            "the roots are crowded. If it is, harvest the plant and reseed.",
+            [21],
+            every=14,
+        ),
+        _task(
+            "Sow cilantro again",
+            "Cilantro runs out fast. A new pot every three weeks keeps a steady "
+            "supply of fresh leaves.",
+            [21],
+            every=21,
+            until=45,
+        ),
+    ]
+    return herbs
 
 
 _apply_patches()

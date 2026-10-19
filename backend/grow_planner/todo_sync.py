@@ -53,6 +53,12 @@ class TodoPort(Protocol):
         """Delete an item."""
 
 
+def _summary(task: dict[str, str | None], tagged: bool) -> str:
+    """Return the to-do text: with several grows, tasks say which one they are for."""
+    title = str(task["title"])
+    return f"{task['grow']}: {title}" if tagged and task["grow"] else title
+
+
 class TodoSync:
     """Keeps one to-do list in step with one grow system."""
 
@@ -101,10 +107,12 @@ class TodoSync:
                 del mapping[instance_id]  # deleted in HA: it is added back below
 
         # 3. Push instances HA doesn't have yet.
+        tagged = len(system.grows) > 1
         for instance_id, task in shown.items():
             if instance_id in mapping or task["done"]:
                 continue
-            await self.port.add_item(task["title"], task["due"], task["note"])
+            summary = _summary(task, tagged)
+            await self.port.add_item(summary, task["due"], task["note"])
             items = {i.uid: i for i in await self.port.list_items()}
             taken = set(mapping.values())
             match = next(
@@ -113,7 +121,7 @@ class TodoSync:
                     for i in items.values()
                     if i.uid not in taken
                     and not i.completed
-                    and i.summary == task["title"]
+                    and i.summary == summary
                     and (i.due or None) == (task["due"] or None)
                 ),
                 None,

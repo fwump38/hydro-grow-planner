@@ -56,7 +56,7 @@ actions:
   - variables:
       title: >
         {% if trigger.id == 'tasks_due' %}{{ trigger.event.data.system }}: {{ trigger.event.data.count }} to do
-        {% elif trigger.id == 'stage_complete' %}{{ trigger.event.data.system }}: {{ trigger.event.data.stage }} is done?
+        {% elif trigger.id == 'stage_complete' %}{{ trigger.event.data.system }}: {{ trigger.event.data.grow }} — {{ trigger.event.data.stage }} is done?
         {% else %}{{ trigger.event.data.system }}: water reading due{% endif %}
       message: >
         {% if trigger.id == 'tasks_due' %}{% for t in trigger.event.data.tasks %}{{ '• ' ~ t.title ~ (' (overdue)' if t.overdue else '') }}

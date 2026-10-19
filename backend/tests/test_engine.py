@@ -100,11 +100,11 @@ async def test_night_lighting_shifts_light_windows(h: Harness) -> None:
 
 async def test_stages_never_advance_on_their_own(h: Harness) -> None:
     await h.system.start_grow("Leafy Greens")
-    first = h.system.active_stage
+    first = h.system.grow().stage
     for _ in range(40):
         h.clock.advance(days=1)
         await h.system.tick()
-    assert h.system.active_stage == first
+    assert h.system.grow().stage == first
     assert len(h.ha.fired(EVENT_STAGE_COMPLETE_DUE)) == 1  # prompted once, not repeatedly
 
 
@@ -123,13 +123,13 @@ async def test_advance_and_previous_undo_restores_progress(h: Harness) -> None:
     check = item(h, "Check water volume")
     await h.system.complete_task(check["id"])
     await h.system.advance_stage()
-    assert h.system.active_stage.name == "Seedling"
+    assert h.system.grow().stage.name == "Seedling"
     assert "Check water volume" not in titles(h, include_done=True)
 
     await h.system.previous_stage()
-    assert h.system.active_stage.name == "Sprouting"
+    assert h.system.grow().stage.name == "Sprouting"
     assert item(h, "Check water volume")["done"] is True  # checked-off state restored
-    assert h.system.stage_started == TODAY
+    assert h.system.grow().stage_started == TODAY
 
 
 async def test_last_and_first_stage_limits(h: Harness) -> None:
@@ -144,9 +144,9 @@ async def test_last_and_first_stage_limits(h: Harness) -> None:
 async def test_restart_stage_resets_the_day(h: Harness) -> None:
     await h.system.start_grow("Leafy Greens")
     h.clock.advance(days=3)
-    assert h.system.stage_day == 4
+    assert h.system.grow().stage_day == 4
     await h.system.restart_stage()
-    assert h.system.stage_day == 1
+    assert h.system.grow().stage_day == 1
 
 
 # -- starting mid-cycle -------------------------------------------------------------------
@@ -157,9 +157,9 @@ async def test_start_mid_cycle_derives_grow_start_and_day(h: Harness) -> None:
     await h.system.start_grow(
         "Leafy Greens", stage_ref="Vegetative", stage_started=TODAY - timedelta(days=10)
     )
-    assert h.system.stage_day == 11
-    assert h.system.grow_day == 25
-    assert h.system.grow_started == TODAY - timedelta(days=24)
+    assert h.system.grow().stage_day == 11
+    assert h.system.grow().grow_day == 25
+    assert h.system.grow().grow_started == TODAY - timedelta(days=24)
 
 
 async def test_start_mid_cycle_recurring_tasks_are_due_today(h: Harness) -> None:
@@ -377,7 +377,7 @@ async def test_removing_the_current_stage_moves_to_the_first(h: Harness) -> None
     plan = dict(h.system.data["plans"]["leafy"])
     plan["stages"] = plan["stages"][:2]
     h.system.set_plan("leafy", plan)
-    assert h.system.active_stage.name == "Sprouting"
+    assert h.system.grow().stage.name == "Sprouting"
 
 
 # -- snapshot -------------------------------------------------------------------------------------
@@ -387,14 +387,15 @@ async def test_snapshot_shape(h: Harness) -> None:
     from grow_planner.snapshot import snapshot
 
     idle = snapshot(h.system)
-    assert idle["active"] is False and idle["stage"] is None and idle["plan"] is None
+    assert idle["active"] is False and idle["grows"] == []
 
     h.system.data["ec_unit"] = "ppm 500"
     await h.system.start_grow("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=4))
     await h.system.record_reading(ph=6.1, ec=800)
     snap = snapshot(h.system, with_profiles=True)
-    assert snap["stage"]["name"] == "Vegetative" and snap["stage"]["day"] == 5
-    assert snap["stage"]["count"] == 3 and len(snap["stages"]) == 3
+    [grow] = snap["grows"]
+    assert grow["stage"]["name"] == "Vegetative" and grow["stage"]["day"] == 5
+    assert grow["stage"]["count"] == 3 and len(grow["stages"]) == 3
     assert snap["metrics"]["ec"]["value"] == 800
     assert snap["metrics"]["ec"]["unit"] == "ppm 500"
     assert snap["metrics"]["ec"]["range"] == "600–1000"  # 1.2-2.0 mS/cm in ppm 500
@@ -413,7 +414,7 @@ async def test_all_digit_stage_id_is_not_mistaken_for_a_stage_number(h: Harness)
     h.system.set_plan("leafy", plan)
     await h.system.start_grow("Leafy Greens", stage_ref=3)
     await h.system.set_stage("73984280")
-    assert h.system.active_stage.name == "Sprouting"
+    assert h.system.grow().stage.name == "Sprouting"
 
 
 async def test_an_idle_tick_signals_no_change(h: Harness) -> None:

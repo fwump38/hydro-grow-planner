@@ -1,6 +1,7 @@
 // Typed client for the backend. URLs are relative so the panel works under any
 // Home Assistant ingress path.
 
+import type { RoleMap } from "./roles";
 import type {
   EntityRow,
   FieldError,
@@ -49,7 +50,11 @@ const del = <T>(path: string) => request<T>("DELETE", path);
 export interface StartArgs {
   plan?: string;
   template?: string;
-  role_map?: Record<string, string>;
+  role_map?: RoleMap;
+  /** Label for the new grow, e.g. "Layers 1+2". */
+  name?: string;
+  /** Replace this grow (id) instead of adding another. */
+  replace?: string;
   stage?: string | number;
   stage_started?: string;
   grow_started?: string;
@@ -70,8 +75,6 @@ export const api = {
 
   switchDevice: (id: string, device: string, on: boolean) =>
     post<Snapshot>(`systems/${id}/devices/${device}/switch`, { on }),
-  nightLighting: (id: string, enabled: boolean) =>
-    post<Snapshot>(`systems/${id}/night-lighting`, { enabled }),
   scheduleControl: (id: string, enabled: boolean) =>
     post<Snapshot>(`systems/${id}/schedule-control`, { enabled }),
   sync: (id: string) => post<Snapshot>(`systems/${id}/sync`),
@@ -82,16 +85,18 @@ export const api = {
   readings: (id: string, days = 14) =>
     get<{ ec_unit: string; readings: Reading[] }>(`systems/${id}/readings?days=${days}`),
 
-  previewStart: (id: string, args: StartArgs) => post<Preview>(`systems/${id}/grow/preview`, args),
-  startGrow: (id: string, args: StartArgs) => post<Snapshot>(`systems/${id}/grow/start`, args),
-  endGrow: (id: string) => post<Snapshot>(`systems/${id}/grow/end`),
-  stageAction: (id: string, action: "advance" | "previous" | "restart") =>
-    post<Snapshot>(`systems/${id}/stage/${action}`),
-  setStage: (id: string, stage: string | number, started?: string) =>
-    post<Snapshot>(`systems/${id}/stage`, { stage, started }),
+  previewStart: (id: string, args: StartArgs) => post<Preview>(`systems/${id}/grows/preview`, args),
+  startGrow: (id: string, args: StartArgs) => post<Snapshot>(`systems/${id}/grows`, args),
+  endGrow: (id: string, grow: string) => del<Snapshot>(`systems/${id}/grows/${grow}`),
+  updateGrow: (id: string, grow: string, changes: { name?: string; night_lighting?: boolean }) =>
+    patch<Snapshot>(`systems/${id}/grows/${grow}`, changes),
+  stageAction: (id: string, grow: string, action: "advance" | "previous" | "restart") =>
+    post<Snapshot>(`systems/${id}/grows/${grow}/stage/${action}`),
 
-  addTask: (id: string, task: { title: string; due?: string; note?: string; every?: number }) =>
-    post<Snapshot>(`systems/${id}/tasks`, task),
+  addTask: (
+    id: string,
+    task: { title: string; due?: string; note?: string; every?: number; grow?: string },
+  ) => post<Snapshot>(`systems/${id}/tasks`, task),
   completeTask: (id: string, task: string) => post<Snapshot>(`systems/${id}/tasks/${task}/complete`),
   reopenTask: (id: string, task: string) => post<Snapshot>(`systems/${id}/tasks/${task}/reopen`),
   deleteTask: (id: string, task: string) => del<Snapshot>(`systems/${id}/tasks/${task}`),
@@ -99,7 +104,7 @@ export const api = {
   plans: (id: string) => get<Record<string, Plan>>(`systems/${id}/plans`),
   createPlan: (
     id: string,
-    args: { template?: string; role_map?: Record<string, string>; name?: string },
+    args: { template?: string; role_map?: RoleMap; name?: string },
   ) => post<{ plan_id: string; plan: Plan }>(`systems/${id}/plans`, args),
   savePlan: (id: string, plan: string, data: Plan) =>
     put<{ plan: Plan }>(`systems/${id}/plans/${plan}`, data),

@@ -1,4 +1,4 @@
-"""The grow system engine: one running grow, its devices, tasks, readings and alerts.
+"""The grow system engine: its running grows, devices, tasks, readings and alerts.
 
 `GrowSystem` has no I/O of its own. Home Assistant, the clock and persistence are
 injected (see ports.py), so the whole thing is testable with fakes. All persisted
@@ -32,6 +32,7 @@ from .core.const import (
     EVENT_TASK_COMPLETED,
     EVENT_TASK_CREATED,
     EVENT_TASKS_DUE,
+    MODE_MANUAL,
 )
 from .core.models import DeviceSchedule, Plan, Stage, Task, new_id, out_of_range
 from .core.progress import (
@@ -63,6 +64,15 @@ CONFIG_KEYS = {
 }
 # What describes one stage run; saved to history when a stage is left.
 RUN_KEYS = ("stage_id", "stage_started", "stage_run", "instances")
+# What a system used to keep for its one grow; moved into a grow record on load.
+LEGACY_GROW_KEYS = (
+    "plan_id",
+    "stage_id",
+    "stage_started",
+    "grow_started",
+    "stage_run",
+    "stage_check_notified",
+)
 
 
 class GrowError(Exception):
@@ -77,6 +87,112 @@ class Device:
     name: str
     entity_id: str
     light: bool = False
+
+
+class Grow:
+    """One running plan: its own stage, dates, tasks and night lighting.
+
+    A system can run several grows at once. They share its devices, sensors and
+    water readings; everything else lives in the grow's record (`rt["grows"]`).
+    """
+
+    def __init__(self, system: GrowSystem, data: dict[str, Any]) -> None:
+        """Wrap a grow record of `system`."""
+        self.system = system
+        self.data = data
+
+    @property
+    def id(self) -> str:
+        """Return the grow id."""
+        return self.data["id"]
+
+    @property
+    def seq(self) -> int:
+        """Return the order grows were started in (the oldest wins range conflicts)."""
+        return int(self.data.get("seq", 0))
+
+    @property
+    def plan(self) -> Plan | None:
+        """Return the plan being run."""
+        return self.system.plans.get(self.data.get("plan_id") or "")
+
+    @property
+    def name(self) -> str:
+        """Return the grow's label, e.g. "Layers 1+2" (the plan name by default)."""
+        plan = self.plan
+        return self.data.get("name") or (plan.name if plan else "Grow")
+
+    @property
+    def stage_index(self) -> int | None:
+        """Return the 0-based index of the current stage."""
+        plan = self.plan
+        return plan.stage_index(self.data.get("stage_id")) if plan else None
+
+    @property
+    def stage(self) -> Stage | None:
+        """Return the current stage."""
+        plan, index = self.plan, self.stage_index
+        return plan.stages[index] if plan is not None and index is not None else None
+
+    @property
+    def is_active(self) -> bool:
+        """Return True when the plan and stage still exist."""
+        return self.stage is not None
+
+    @property
+    def stage_started(self) -> date | None:
+        """Return the date the current stage started."""
+        value = self.data.get("stage_started")
+        return date.fromisoformat(value) if value else None
+
+    @property
+    def grow_started(self) -> date | None:
+        """Return the date the grow started."""
+        value = self.data.get("grow_started")
+        return date.fromisoformat(value) if value else None
+
+    @property
+    def stage_day(self) -> int | None:
+        """Return the 1-based day of the current stage."""
+        started = self.stage_started
+        return day_number(started, self.system.today) if self.is_active and started else None
+
+    @property
+    def grow_day(self) -> int | None:
+        """Return the 1-based day of the whole grow."""
+        started = self.grow_started
+        return day_number(started, self.system.today) if self.is_active and started else None
+
+    @property
+    def night_lighting(self) -> bool:
+        """Return True when this grow's light windows are shifted by 12 hours."""
+        return bool(self.data.get("night_lighting"))
+
+    def schedule_for(self, device: Device) -> DeviceSchedule | None:
+        """Return the device's effective schedule in this grow's current stage."""
+        stage = self.stage
+        if stage is None:
+            return None
+        schedule = stage.schedule_for(device.id)
+        return shift_for_night(schedule) if self.night_lighting and device.light else schedule
+
+    def range_for(self, metric: str) -> tuple[float | None, float | None]:
+        """Return this grow's own target range (EC in mS/cm; temperature in the plan's unit)."""
+        plan, stage = self.plan, self.stage
+        if plan is None or stage is None:
+            return None, None
+        return {
+            "ph": (plan.ph_min, plan.ph_max),
+            "ec": (stage.ec_min, stage.ec_max),
+            "temperature": (plan.temp_min, plan.temp_max),
+            "humidity": (plan.humidity_min, plan.humidity_max),
+        }[metric]
+
+
+def combined_desired(schedules: list[DeviceSchedule], now: datetime) -> bool | None:
+    """Return what a device shared by several grows should do: on if any grow wants it on."""
+    states = [state for s in schedules if (state := desired_state(s, now)) is not None]
+    return any(states) if states else None
 
 
 def guess_is_light(entity_id: str, name: str) -> bool:
@@ -127,14 +243,41 @@ class GrowSystem:
 
         rt = data.setdefault("runtime", {})
         rt.setdefault("schedule_enabled", True)
-        rt.setdefault("night_lighting", False)
         rt.setdefault("last_desired", {})
         rt.setdefault("instances", [])
         rt.setdefault("custom_tasks", {})
-        rt.setdefault("history", [])
+        rt.setdefault("grows", {})
+        rt.setdefault("grow_seq", 0)
         rt.setdefault("activity", [])
         rt.setdefault("alerts", {})
         self._alerts = {m: RangeAlert(rt["alerts"].setdefault(m, {})) for m in METRICS}
+        self._migrate_single_grow()
+
+    def _migrate_single_grow(self) -> None:
+        """Move the one grow older versions kept in the runtime into a grow record."""
+        rt = self.rt
+        if not any(key in rt for key in (*LEGACY_GROW_KEYS, "night_lighting", "history")):
+            return
+        night = bool(rt.pop("night_lighting", False))
+        history = rt.pop("history", [])
+        legacy = {key: rt.pop(key) for key in LEGACY_GROW_KEYS if key in rt}
+        plan = self.plans.get(legacy.get("plan_id") or "")
+        if plan is None or plan.stage_index(legacy.get("stage_id")) is None:
+            rt["instances"] = [i for i in rt["instances"] if i.get("custom")]
+            return
+        grow_id = self._make_id()
+        rt["grow_seq"] += 1
+        rt["grows"][grow_id] = {
+            "id": grow_id,
+            "name": plan.name,
+            "seq": rt["grow_seq"],
+            "night_lighting": night,
+            "history": history,
+            **legacy,
+        }
+        for inst in rt["instances"]:
+            if not inst.get("custom"):
+                inst["grow"] = grow_id
 
     # ------------------------------------------------------------------
     # Basics
@@ -207,23 +350,27 @@ class GrowSystem:
         """Create or replace a plan (editing a running plan keeps the grow going)."""
         self.data["plans"][plan_id] = plan_data
         self._plans_cache = None
-        rt = self.rt
-        if rt.get("plan_id") == plan_id and self.active_stage is None:
+        for grow in self.grows:
+            if grow.data.get("plan_id") != plan_id or grow.is_active:
+                continue
             plan = self.plans[plan_id]
             if plan.stages:
-                self._log("plan", "The current stage was removed; moved to the first stage")
-                self._enter_stage(plan, plan.stages[0], self.today)
+                self._log(
+                    "plan", f"{grow.name}: the current stage was removed; moved to the first stage"
+                )
+                self._enter_stage(grow, plan, plan.stages[0], self.today)
             else:
-                self._clear_grow()
+                self._clear_grow(grow)
         self._changed()
 
     def delete_plan(self, plan_id: str) -> None:
-        """Delete a plan; ends the grow if it was running."""
+        """Delete a plan; ends every grow that was running it."""
+        for grow in self.grows:
+            if grow.data.get("plan_id") == plan_id:
+                self._log("grow", f"The plan of {grow.name} was deleted; the grow ended")
+                self._clear_grow(grow)
         self.data["plans"].pop(plan_id, None)
         self._plans_cache = None
-        if self.rt.get("plan_id") == plan_id:
-            self._clear_grow()
-            self._log("grow", "The running plan was deleted; the grow ended")
         self._changed()
 
     def update_config(self, **fields: Any) -> None:
@@ -303,55 +450,40 @@ class GrowSystem:
     # ------------------------------------------------------------------
 
     @property
-    def active_plan(self) -> Plan | None:
-        """Return the running plan."""
-        return self.plans.get(self.rt.get("plan_id") or "")
+    def grows(self) -> list[Grow]:
+        """Return every grow, oldest first."""
+        records = sorted(self.rt["grows"].values(), key=lambda g: (g.get("seq", 0), g["id"]))
+        return [Grow(self, record) for record in records]
 
     @property
-    def stage_index(self) -> int | None:
-        """Return the 0-based index of the current stage."""
-        plan = self.active_plan
-        return plan.stage_index(self.rt.get("stage_id")) if plan else None
-
-    @property
-    def active_stage(self) -> Stage | None:
-        """Return the current stage."""
-        plan, index = self.active_plan, self.stage_index
-        return plan.stages[index] if plan is not None and index is not None else None
+    def active_grows(self) -> list[Grow]:
+        """Return the grows that are running."""
+        return [g for g in self.grows if g.is_active]
 
     @property
     def is_active(self) -> bool:
-        """Return True when a grow is running."""
-        return self.active_stage is not None
+        """Return True when at least one grow is running."""
+        return bool(self.active_grows)
 
-    @property
-    def stage_started(self) -> date | None:
-        """Return the date the current stage started."""
-        value = self.rt.get("stage_started")
-        return date.fromisoformat(value) if value else None
+    def grow(self, ref: str | None = None) -> Grow:
+        """Return a grow by id or name; without a ref, the only grow."""
+        grows = self.grows
+        if ref is None:
+            if len(grows) == 1:
+                return grows[0]
+            if not grows:
+                raise GrowError("No grow is running")
+            raise GrowError("Choose which grow: " + ", ".join(g.name for g in grows))
+        for grow in grows:
+            if ref == grow.id:
+                return grow
+        for grow in grows:
+            if grow.name.casefold() == str(ref).casefold():
+                return grow
+        raise GrowError(f"Unknown grow: {ref}")
 
-    @property
-    def grow_started(self) -> date | None:
-        """Return the date the grow started."""
-        value = self.rt.get("grow_started")
-        return date.fromisoformat(value) if value else None
-
-    @property
-    def stage_day(self) -> int | None:
-        """Return the 1-based day of the current stage."""
-        started = self.stage_started
-        return day_number(started, self.today) if self.is_active and started else None
-
-    @property
-    def grow_day(self) -> int | None:
-        """Return the 1-based day of the whole grow."""
-        started = self.grow_started
-        return day_number(started, self.today) if self.is_active and started else None
-
-    @property
-    def night_lighting(self) -> bool:
-        """Return True when light windows are shifted by 12 hours."""
-        return bool(self.rt["night_lighting"])
+    def _grow_fields(self, grow: Grow) -> dict[str, Any]:
+        return {"grow_id": grow.id, "grow": grow.name}
 
     @property
     def schedule_enabled(self) -> bool:
@@ -417,13 +549,14 @@ class GrowSystem:
 
     @property
     def temperature_unit(self) -> str:
-        """Return the unit the plan's temperature range is in."""
-        plan = self.active_plan
+        """Return the unit temperatures are shown in (the oldest running plan's)."""
+        grows = self.active_grows
+        plan = grows[0].plan if grows else None
         return plan.temp_unit if plan else "°C"
 
     @property
     def temperature(self) -> float | None:
-        """Return the room temperature in the plan's unit."""
+        """Return the room temperature in `temperature_unit`."""
         reading = self._sensor_state("temperature")
         if reading is None:
             return None
@@ -435,17 +568,37 @@ class GrowSystem:
         reading = self._sensor_state("humidity")
         return reading[0] if reading else None
 
+    def _combined_range(self, metric: str) -> tuple[float | None, float | None, bool]:
+        """Return (min, max, conflict) over every running grow.
+
+        The room and reservoir are shared, so the target is where the grows'
+        ranges overlap. When they don't, the oldest grow's range is used and
+        `conflict` is True.
+        """
+        ranges = []
+        for grow in self.active_grows:
+            low, high = grow.range_for(metric)
+            plan = grow.plan
+            if metric == "temperature" and plan is not None:
+                unit = self.temperature_unit
+                low = convert_temperature(low, plan.temp_unit, unit) if low is not None else None
+                high = convert_temperature(high, plan.temp_unit, unit) if high is not None else None
+            ranges.append((low, high))
+        lows = [low for low, _ in ranges if low is not None]
+        highs = [high for _, high in ranges if high is not None]
+        low, high = (max(lows) if lows else None), (min(highs) if highs else None)
+        if low is not None and high is not None and low > high:
+            return ranges[0][0], ranges[0][1], True
+        return low, high, False
+
     def range_for(self, metric: str) -> tuple[float | None, float | None]:
         """Return the target range of a metric in canonical units (EC in mS/cm)."""
-        plan, stage = self.active_plan, self.active_stage
-        if plan is None or stage is None:
-            return None, None
-        return {
-            "ph": (plan.ph_min, plan.ph_max),
-            "ec": (stage.ec_min, stage.ec_max),
-            "temperature": (plan.temp_min, plan.temp_max),
-            "humidity": (plan.humidity_min, plan.humidity_max),
-        }[metric]
+        low, high, _ = self._combined_range(metric)
+        return low, high
+
+    def range_conflict(self, metric: str) -> bool:
+        """Return True when the running grows' ranges for a metric don't overlap."""
+        return self._combined_range(metric)[2]
 
     def value_of(self, metric: str) -> float | None:
         """Return the current value of a metric in canonical units."""
@@ -475,9 +628,10 @@ class GrowSystem:
             return False
         last = self.last_reading
         if last is None:
-            started = self.grow_started
-            if started is None:
+            starts = [g.grow_started for g in self.active_grows if g.grow_started]
+            if not starts:
                 return False
+            started = min(starts)
             last = datetime.combine(started, datetime.min.time(), tzinfo=self.now.tzinfo)
         interval = timedelta(
             days=self.data.get("reading_interval_days", DEFAULT_READING_INTERVAL_DAYS)
@@ -488,23 +642,33 @@ class GrowSystem:
     # Devices
     # ------------------------------------------------------------------
 
+    def drivers(self, device: Device) -> list[tuple[Grow, DeviceSchedule]]:
+        """Return the running grows that manage a device, with their schedules."""
+        result = []
+        for grow in self.active_grows:
+            schedule = grow.schedule_for(device)
+            if schedule is not None and schedule.mode != MODE_MANUAL:
+                result.append((grow, schedule))
+        return result
+
     def schedule_for(self, device: Device) -> DeviceSchedule | None:
-        """Return the device's effective schedule in the current stage."""
-        stage = self.active_stage
-        if stage is None:
-            return None
-        schedule = stage.schedule_for(device.id)
-        return shift_for_night(schedule) if self.night_lighting and device.light else schedule
+        """Return the schedule to show for a device (the oldest managing grow's)."""
+        drivers = self.drivers(device)
+        if drivers:
+            return drivers[0][1]
+        return DeviceSchedule() if self.is_active else None
 
     def desired(self, device: Device) -> bool | None:
-        """Return the desired state of a device right now (None = unmanaged)."""
-        schedule = self.schedule_for(device)
-        return desired_state(schedule, self.now) if schedule else None
+        """Return the desired state of a device right now (None = unmanaged).
+
+        A device two grows schedule is on whenever either wants it on.
+        """
+        return combined_desired([s for _, s in self.drivers(device)], self.now)
 
     def next_change(self, device: Device) -> datetime | None:
         """Return when the device's desired state may next change."""
-        schedule = self.schedule_for(device)
-        return next_transition(schedule, self.now) if schedule else None
+        changes = [t for _, s in self.drivers(device) if (t := next_transition(s, self.now))]
+        return min(changes) if changes else None
 
     def actual(self, device: Device) -> bool | None:
         """Return whether the device is on right now (None when unknown)."""
@@ -566,9 +730,9 @@ class GrowSystem:
         await self.switch(device, on, "manual")
         self._on_change()
 
-    async def set_night_lighting(self, enabled: bool) -> None:
-        """Shift light windows by 12 hours (or back) and re-sync."""
-        self.rt["night_lighting"] = enabled
+    async def set_night_lighting(self, enabled: bool, grow: str | None = None) -> None:
+        """Shift one grow's light windows by 12 hours (or back) and re-sync."""
+        self.grow(grow).data["night_lighting"] = enabled
         self._on_save()
         await self.sync(force=True)
 
@@ -612,12 +776,6 @@ class GrowSystem:
                 return plan.stages[index]
         raise GrowError(f"Unknown stage {stage_ref} in {plan.name}")
 
-    def _require_active(self) -> tuple[Plan, Stage]:
-        plan, stage = self.active_plan, self.active_stage
-        if plan is None or stage is None:
-            raise GrowError("No grow is running")
-        return plan, stage
-
     def _stage_check_task(self, plan: Plan, stage: Stage) -> Task:
         """A reminder on the stage's last planned day to decide on moving on."""
         index = plan.stage_index(stage.id) or 0
@@ -633,37 +791,61 @@ class GrowSystem:
             note="\n\n".join(part for part in (outcome, action) if part),
         )
 
+    def _require_active(self, grow: str | None) -> tuple[Grow, Plan, Stage]:
+        found = self.grow(grow)
+        plan, stage = found.plan, found.stage
+        if plan is None or stage is None:
+            raise GrowError("No grow is running")
+        return found, plan, stage
+
     def _enter_stage(
-        self, plan: Plan, stage: Stage, started: date, include_past_tasks: bool = False
+        self,
+        grow: Grow,
+        plan: Plan,
+        stage: Stage,
+        started: date,
+        include_past_tasks: bool = False,
     ) -> None:
-        rt = self.rt
-        if rt.get("stage_id"):
+        rt, record = self.rt, grow.data
+        if record.get("stage_id"):
             # Remember the stage being left so going back can undo the move.
-            entry = {key: rt.get(key) for key in RUN_KEYS}
-            entry["instances"] = [i for i in rt["instances"] if not i.get("custom")]
-            rt["history"].append(entry)
-            del rt["history"][:-MAX_HISTORY]
+            entry = {key: record.get(key) for key in RUN_KEYS}
+            entry["instances"] = [
+                i for i in rt["instances"] if i.get("grow") == grow.id and not i.get("custom")
+            ]
+            record.setdefault("history", []).append(entry)
+            del record["history"][:-MAX_HISTORY]
         # Plan task instances belong to a stage run; custom ones carry over.
-        rt["instances"] = [i for i in rt["instances"] if i.get("custom")]
-        rt["stage_id"] = stage.id
-        rt["stage_started"] = started.isoformat()
-        rt["stage_run"] = rt.get("stage_run", 0) + 1
-        rt["stage_check_notified"] = False
+        rt["instances"] = [
+            i for i in rt["instances"] if i.get("custom") or i.get("grow") != grow.id
+        ]
+        record["stage_id"] = stage.id
+        record["stage_started"] = started.isoformat()
+        record["stage_run"] = record.get("stage_run", 0) + 1
+        record["stage_check_notified"] = False
         today = self.today
         created = initial_instances(
-            stage, rt["stage_run"], started, today, self._make_id, include_past_tasks
+            stage, record["stage_run"], started, today, self._make_id, include_past_tasks
         )
         check_due = max(due_date(started, stage.days), today)
-        created.append(TaskInstance(self._make_id(), STAGE_CHECK_ID, rt["stage_run"], check_due))
-        rt["instances"].extend(_dump_instance(i, custom=False) for i in created)
+        created.append(
+            TaskInstance(self._make_id(), STAGE_CHECK_ID, record["stage_run"], check_due)
+        )
+        rt["instances"].extend(_dump_instance(i, custom=False, grow=grow.id) for i in created)
 
-    def _clear_grow(self) -> None:
+    def _clear_grow(self, grow: Grow) -> None:
         rt = self.rt
-        for key in ("plan_id", "stage_id", "stage_started", "grow_started"):
-            rt.pop(key, None)
-        rt["history"] = []
-        rt["last_desired"] = {}
-        rt["instances"] = [i for i in rt["instances"] if i.get("custom")]
+        rt["grows"].pop(grow.id, None)
+        kept = []
+        for inst in rt["instances"]:
+            if inst.get("grow") == grow.id:
+                if not inst.get("custom"):
+                    continue
+                inst["grow"] = None
+            kept.append(inst)
+        rt["instances"] = kept
+        if not rt["grows"]:
+            rt["last_desired"] = {}
         for alert in self._alerts.values():
             alert.reset()
         rt["reading_overdue_notified"] = False
@@ -676,11 +858,15 @@ class GrowSystem:
         grow_started: date | None = None,
         night_lighting: bool | None = None,
         include_past_tasks: bool = False,
-    ) -> None:
-        """Start a plan, optionally at a later stage and backdated.
+        name: str | None = None,
+        replace: str | None = None,
+    ) -> str:
+        """Start a plan as a new grow, optionally at a later stage and backdated.
 
         `stage_started` is the date the chosen stage began. Unless `grow_started` is
         given, the grow's start date is worked out from the earlier stages' lengths.
+        With `replace` (a grow id or name) that grow is replaced, keeping its place.
+        Returns the grow's id.
         """
         plan = self._plan_or_raise(plan_ref)
         if not plan.stages:
@@ -688,18 +874,41 @@ class GrowSystem:
         stage = plan.stages[0] if stage_ref is None else self._stage_or_raise(plan, stage_ref)
         index = plan.stage_index(stage.id) or 0
         started = stage_started or self.today
-        self._clear_grow()
-        self.rt["plan_id"] = plan.id
-        if night_lighting is not None:
-            self.rt["night_lighting"] = night_lighting
-        self.rt["grow_started"] = (grow_started or grow_start_for(plan, index, started)).isoformat()
-        self._enter_stage(plan, stage, started, include_past_tasks)
-        self._log("grow", f"Started {plan.name} at {stage.name}")
+        old = self.grow(replace) if replace is not None else None
+        label = (name or "").strip() or plan.name
+        if label.casefold() in {
+            g.name.casefold() for g in self.grows if old is None or g.id != old.id
+        }:
+            raise GrowError(f"There is already a grow called {label}")
+        grow_id = old.id if old else self._make_id()
+        seq = old.seq if old else self.rt["grow_seq"] + 1
+        night = night_lighting if night_lighting is not None else bool(old and old.night_lighting)
+        if old:
+            self._clear_grow(old)
+        self.rt["grow_seq"] = max(self.rt["grow_seq"], seq)
+        self.rt["grows"][grow_id] = {
+            "id": grow_id,
+            "name": label,
+            "seq": seq,
+            "plan_id": plan.id,
+            "night_lighting": night,
+            "grow_started": (grow_started or grow_start_for(plan, index, started)).isoformat(),
+            "history": [],
+        }
+        grow = self.grow(grow_id)
+        self._enter_stage(grow, plan, stage, started, include_past_tasks)
+        self._log("grow", f"Started {label} ({plan.name}) at {stage.name}")
         await self._fire(
             EVENT_GROW_STARTED,
-            {"plan": plan.name, "stage": stage.name, "stage_started": started.isoformat()},
+            {
+                **self._grow_fields(grow),
+                "plan": plan.name,
+                "stage": stage.name,
+                "stage_started": started.isoformat(),
+            },
         )
-        await self._after_stage_change(None)
+        await self._after_stage_change(grow, None)
+        return grow_id
 
     def preview_start(
         self,
@@ -708,6 +917,8 @@ class GrowSystem:
         stage_started: date | None = None,
         include_past_tasks: bool = False,
         plan_data: dict[str, Any] | None = None,
+        replace: str | None = None,
+        night_lighting: bool | None = None,
     ) -> dict[str, Any]:
         """Describe what starting a grow this way would do, without doing it.
 
@@ -743,13 +954,28 @@ class GrowSystem:
                     }
                 )
         skipped = [t.title for t in stage.tasks if t.id not in wanted]
-        night = self.night_lighting
+        old = self.grow(replace) if replace is not None else None
+        night = night_lighting if night_lighting is not None else bool(old and old.night_lighting)
+        others = [g for g in self.active_grows if old is None or g.id != old.id]
         devices = []
         for device in self.devices:
             schedule = stage.schedule_for(device.id)
             if night and device.light:
                 schedule = shift_for_night(schedule)
-            devices.append({"name": device.name, "desired": desired_state(schedule, now)})
+            mine = schedule.mode != MODE_MANUAL
+            shared = [
+                (g.name, s)
+                for g in others
+                if (s := g.schedule_for(device)) and s.mode != MODE_MANUAL
+            ]
+            schedules = [s for _, s in shared] + ([schedule] if mine else [])
+            devices.append(
+                {
+                    "name": device.name,
+                    "desired": combined_desired(schedules, now),
+                    "shared_with": [n for n, _ in shared] if mine else [],
+                }
+            )
         return {
             "plan": plan.name,
             "stage": stage.name,
@@ -766,67 +992,86 @@ class GrowSystem:
             "skipped_tasks": skipped,
         }
 
-    async def end_grow(self) -> None:
-        """Stop the running grow. Devices are left as they are."""
-        plan = self.active_plan
-        self._clear_grow()
-        self._log("grow", "Grow ended")
+    async def end_grow(self, grow: str | None = None) -> None:
+        """Stop a grow. Devices are left as they are."""
+        found = self.grow(grow)
+        plan = found.plan
+        fields = self._grow_fields(found)
+        self._clear_grow(found)
+        self._log("grow", f"{fields['grow']} ended")
         self._changed()
-        await self._fire(EVENT_GROW_ENDED, {"plan": plan.name if plan else None})
+        await self._fire(EVENT_GROW_ENDED, {**fields, "plan": plan.name if plan else None})
+
+    async def rename_grow(self, name: str, grow: str | None = None) -> None:
+        """Change a grow's label."""
+        found = self.grow(grow)
+        name = name.strip()
+        if not name:
+            raise GrowError("A grow needs a name")
+        if any(g.id != found.id and g.name.casefold() == name.casefold() for g in self.grows):
+            raise GrowError(f"There is already a grow called {name}")
+        found.data["name"] = name
+        self._changed()
 
     async def set_stage(
-        self, stage_ref: str | int, started: date | None = None, include_past_tasks: bool = False
+        self,
+        stage_ref: str | int,
+        started: date | None = None,
+        include_past_tasks: bool = False,
+        grow: str | None = None,
     ) -> None:
-        """Jump to a stage of the running plan."""
-        plan, previous = self._require_active()
+        """Jump to a stage of a running plan."""
+        found, plan, previous = self._require_active(grow)
         stage = self._stage_or_raise(plan, stage_ref)
-        history = self.rt["history"]
+        history = found.data.setdefault("history", [])
         if started is None and history and history[-1]["stage_id"] == stage.id:
             # Going back to the stage we just left: undo the move instead of
             # restarting it, keeping its start date and its tasks' progress.
             entry = history.pop()
-            self.rt["instances"] = [i for i in self.rt["instances"] if i.get("custom")]
-            self.rt.update({k: entry[k] for k in ("stage_id", "stage_started", "stage_run")})
+            self.rt["instances"] = [
+                i for i in self.rt["instances"] if i.get("custom") or i.get("grow") != found.id
+            ]
+            found.data.update({k: entry[k] for k in ("stage_id", "stage_started", "stage_run")})
             self.rt["instances"].extend(entry["instances"])
-            self.rt["stage_check_notified"] = False
+            found.data["stage_check_notified"] = False
         else:
-            self._enter_stage(plan, stage, started or self.today, include_past_tasks)
-        self._log("stage", f"Moved to {stage.name}")
-        await self._after_stage_change(previous)
+            self._enter_stage(found, plan, stage, started or self.today, include_past_tasks)
+        self._log("stage", f"{found.name}: moved to {stage.name}")
+        await self._after_stage_change(found, previous)
 
-    async def advance_stage(self) -> None:
-        """Move to the next stage."""
-        plan, _ = self._require_active()
-        index = self.stage_index or 0
+    async def advance_stage(self, grow: str | None = None) -> None:
+        """Move a grow to the next stage."""
+        found, plan, _ = self._require_active(grow)
+        index = found.stage_index or 0
         if index + 1 >= len(plan.stages):
             raise GrowError("Already on the last stage")
-        await self.set_stage(plan.stages[index + 1].id)
+        await self.set_stage(plan.stages[index + 1].id, grow=found.id)
 
-    async def previous_stage(self) -> None:
-        """Move back one stage, undoing the last advance when possible."""
-        plan, _ = self._require_active()
-        index = self.stage_index or 0
+    async def previous_stage(self, grow: str | None = None) -> None:
+        """Move a grow back one stage, undoing the last advance when possible."""
+        found, plan, _ = self._require_active(grow)
+        index = found.stage_index or 0
         if index == 0:
             raise GrowError("Already on the first stage")
-        await self.set_stage(plan.stages[index - 1].id)
+        await self.set_stage(plan.stages[index - 1].id, grow=found.id)
 
-    async def restart_stage(self) -> None:
-        """Restart the current stage from today."""
-        _, stage = self._require_active()
+    async def restart_stage(self, grow: str | None = None) -> None:
+        """Restart a grow's current stage from today."""
+        found, _, stage = self._require_active(grow)
         # An explicit start date bypasses the "undo" path, so this is a true restart.
-        await self.set_stage(stage.id, started=self.today)
+        await self.set_stage(stage.id, started=self.today, grow=found.id)
 
-    async def _after_stage_change(self, previous: Stage | None) -> None:
-        self.rt["last_desired"] = {}
-        plan, stage = self.active_plan, self.active_stage
+    async def _after_stage_change(self, grow: Grow, previous: Stage | None) -> None:
+        plan, stage = grow.plan, grow.stage
         assert plan is not None and stage is not None
         self._changed()
         await self._fire(
             EVENT_STAGE_CHANGED,
             {
+                **self._grow_fields(grow),
                 "plan": plan.name,
                 "stage": stage.name,
-                "stage_number": (self.stage_index or 0) + 1,
+                "stage_number": (grow.stage_index or 0) + 1,
                 "stage_count": len(plan.stages),
                 "previous_stage": previous.name if previous else None,
                 "expected_outcome": stage.outcome,
@@ -914,7 +1159,8 @@ class GrowSystem:
             if custom is None:
                 return None
             return Task.from_dict({"id": inst["task_id"], "days": [1], **custom})
-        plan, stage = self.active_plan, self.active_stage
+        grow = next((g for g in self.grows if g.id == inst.get("grow")), None)
+        plan, stage = (grow.plan, grow.stage) if grow else (None, None)
         if plan is None or stage is None:
             return None
         if inst["task_id"] == STAGE_CHECK_ID:
@@ -924,6 +1170,7 @@ class GrowSystem:
     def task_items(self, include_done: bool = True) -> list[dict[str, Any]]:
         """Return the instances as display dicts, soonest first."""
         today = self.today
+        names = {g.id: g.name for g in self.grows}
         items = []
         for inst in self.rt["instances"]:
             task = self._task_for(inst)
@@ -944,6 +1191,8 @@ class GrowSystem:
                     "done": done,
                     "every": task.every,
                     "custom": bool(inst.get("custom")),
+                    "grow_id": inst.get("grow"),
+                    "grow": names.get(inst.get("grow") or ""),
                 }
             )
         return sorted(items, key=lambda i: (i["done"], i["due"]))
@@ -968,20 +1217,26 @@ class GrowSystem:
         today = self.today
         inst["completed_on"] = today.isoformat()
         nxt = None
+        grow = next((g for g in self.grows if g.id == inst.get("grow")), None)
         if task is not None:
-            started = self.stage_started or today
+            started = (grow.stage_started if grow else None) or today
             nxt = next_instance(task, today, inst["stage_run"], started, self._make_id)
         if nxt is not None:
-            self.rt["instances"].append(_dump_instance(nxt, custom=bool(inst.get("custom"))))
+            self.rt["instances"].append(
+                _dump_instance(nxt, custom=bool(inst.get("custom")), grow=inst.get("grow"))
+            )
         title = task.title if task else ""
-        self._log("task", f"Done: {title}")
+        fields = self._grow_fields(grow) if grow else {"grow_id": None, "grow": None}
+        self._log("task", f"Done: {title}" + (f" ({grow.name})" if grow else ""))
         self._changed()
         await self._fire(
             EVENT_TASK_COMPLETED,
-            {"task": title, "next_due": nxt.due.isoformat() if nxt else None},
+            {**fields, "task": title, "next_due": nxt.due.isoformat() if nxt else None},
         )
         if nxt is not None:
-            await self._fire(EVENT_TASK_CREATED, {"task": title, "due": nxt.due.isoformat()})
+            await self._fire(
+                EVENT_TASK_CREATED, {**fields, "task": title, "due": nxt.due.isoformat()}
+            )
 
     async def reopen_task(self, instance_id: str) -> None:
         """Undo a check-off. Recurring tasks cannot be reopened (their next one exists)."""
@@ -1003,20 +1258,39 @@ class GrowSystem:
         self._changed()
 
     async def add_custom_task(
-        self, title: str, due: date | None = None, note: str = "", every: int = 0
+        self,
+        title: str,
+        due: date | None = None,
+        note: str = "",
+        every: int = 0,
+        grow: str | None = None,
     ) -> str:
-        """Add your own task, optionally repeating every N days after completion."""
+        """Add your own task, optionally repeating every N days after completion.
+
+        `grow` (an id or name) tags the task with a grow; without it the task is
+        for the whole system.
+        """
         title = title.strip()
         if not title:
             raise GrowError("A task needs a title")
         if every < 0:
             raise GrowError("Repeat interval cannot be negative")
+        tagged = self.grow(grow) if grow else None
         task_id = f"custom_{self._make_id()}"
         self.rt["custom_tasks"][task_id] = {"title": title, "note": note, "every": every}
         inst = TaskInstance(self._make_id(), task_id, 0, due or self.today)
-        self.rt["instances"].append(_dump_instance(inst, custom=True))
+        self.rt["instances"].append(
+            _dump_instance(inst, custom=True, grow=tagged.id if tagged else None)
+        )
         self._changed()
-        await self._fire(EVENT_TASK_CREATED, {"task": title, "due": inst.due.isoformat()})
+        await self._fire(
+            EVENT_TASK_CREATED,
+            {
+                **(self._grow_fields(tagged) if tagged else {"grow_id": None, "grow": None}),
+                "task": title,
+                "due": inst.due.isoformat(),
+            },
+        )
         return inst.instance_id
 
     # ------------------------------------------------------------------
@@ -1034,24 +1308,26 @@ class GrowSystem:
         self._prune_done()
 
     async def _maybe_prompt_stage_check(self) -> None:
-        plan, stage, started = self.active_plan, self.active_stage, self.stage_started
-        if plan is None or stage is None or started is None:
-            return
-        if self.rt.get("stage_check_notified") or self.today < due_date(started, stage.days):
-            return
-        self.rt["stage_check_notified"] = True
-        self._on_save()
-        index = self.stage_index or 0
-        nxt = plan.stages[index + 1] if index + 1 < len(plan.stages) else None
-        await self._fire(
-            EVENT_STAGE_COMPLETE_DUE,
-            {
-                "plan": plan.name,
-                "stage": stage.name,
-                "next_stage": nxt.name if nxt else None,
-                "expected_outcome": stage.outcome,
-            },
-        )
+        for grow in self.active_grows:
+            plan, stage, started = grow.plan, grow.stage, grow.stage_started
+            if plan is None or stage is None or started is None:
+                continue
+            if grow.data.get("stage_check_notified") or self.today < due_date(started, stage.days):
+                continue
+            grow.data["stage_check_notified"] = True
+            self._on_save()
+            index = grow.stage_index or 0
+            nxt = plan.stages[index + 1] if index + 1 < len(plan.stages) else None
+            await self._fire(
+                EVENT_STAGE_COMPLETE_DUE,
+                {
+                    **self._grow_fields(grow),
+                    "plan": plan.name,
+                    "stage": stage.name,
+                    "next_stage": nxt.name if nxt else None,
+                    "expected_outcome": stage.outcome,
+                },
+            )
 
     async def _maybe_notify_reading_overdue(self) -> None:
         if not self.reading_overdue or self.rt.get("reading_overdue_notified"):
@@ -1080,7 +1356,10 @@ class GrowSystem:
         due = self.tasks_due()
         if not due:
             return
-        plan, stage = self.active_plan, self.active_stage
+        grows = self.active_grows
+        # With one grow the event says which plan and stage; with several, see each task's grow.
+        plan = grows[0].plan if len(grows) == 1 else None
+        stage = grows[0].stage if len(grows) == 1 else None
         await self._fire(
             EVENT_TASKS_DUE,
             {
@@ -1095,6 +1374,7 @@ class GrowSystem:
                         "due": t["due"],
                         "overdue": t["overdue"],
                         "recurring": t["every"] > 0,
+                        "grow": t["grow"],
                     }
                     for t in due
                 ],
@@ -1113,8 +1393,9 @@ class GrowSystem:
             self._on_save()
 
 
-def _dump_instance(inst: TaskInstance, custom: bool) -> dict[str, Any]:
+def _dump_instance(inst: TaskInstance, custom: bool, grow: str | None) -> dict[str, Any]:
     return {
+        "grow": grow,
         "id": inst.instance_id,
         "task_id": inst.task_id,
         "stage_run": inst.stage_run,

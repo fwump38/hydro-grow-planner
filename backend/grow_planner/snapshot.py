@@ -8,89 +8,27 @@ from .core import units
 from .core.models import format_range
 from .core.progress import days_remaining, expected_end, progress_percent
 from .core.schedule import day_profile, describe
-from .engine import METRICS, GrowSystem
+from .engine import METRICS, Grow, GrowSystem
 
 
 def _ec(value: float | None, unit: str) -> float | None:
     return units.from_canonical(value, unit) if value is not None else None
 
 
-def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
-    """Return everything the UI and entities need to show.
-
-    `with_profiles` adds each device's 24-hour on-windows, which costs a minute-by-
-    minute scan, so only the panel asks for it.
-    """
-    plan, stage = system.active_plan, system.active_stage
-    started = system.stage_started
-    day = system.stage_day
-    now = system.now
-    ec_unit = system.ec_unit
-
-    devices = []
-    for device in system.devices:
-        schedule = system.schedule_for(device)
-        want = system.desired(device)
-        actual = system.actual(device)
-        change = system.next_change(device)
-        entry: dict[str, Any] = {
-            "id": device.id,
-            "name": device.name,
-            "entity_id": device.entity_id,
-            "light": device.light,
-            "state": actual,
-            "desired": want,
-            "override": want is not None and actual is not None and want != actual,
-            "mode": schedule.mode if schedule else None,
-            "schedule": describe(schedule) if schedule else None,
-            "next_change": change.isoformat() if change else None,
-        }
-        if with_profiles and schedule is not None:
-            entry["profile"] = day_profile(schedule, now)
-        devices.append(entry)
-
-    ec_low, ec_high = system.range_for("ec")
-    ranges = {m: system.range_for(m) for m in METRICS}
-    values = {
-        "ph": system.ph,
-        "ec": system.ec,
-        "temperature": system.temperature,
-        "humidity": system.humidity,
-    }
-    metrics = {}
-    for metric in METRICS:
-        low, high = ranges[metric]
-        value = values[metric]
-        if metric == "ec":
-            value, low, high = _ec(value, ec_unit), _ec(low, ec_unit), _ec(high, ec_unit)
-        metrics[metric] = {
-            "value": value,
-            "min": low,
-            "max": high,
-            "range": format_range(low, high),
-            "out_of_range": system.is_out_of_range(metric),
-            "from_sensor": system.has_sensor(metric),
-            "unit": {
-                "ph": None,
-                "ec": ec_unit,
-                "temperature": system.temperature_unit,
-                "humidity": "%",
-            }[metric],
-        }
-
-    last = system.last_reading
-    tasks = system.task_items()
+def _grow_view(grow: Grow) -> dict[str, Any]:
+    plan, stage = grow.plan, grow.stage
+    started, day = grow.stage_started, grow.stage_day
     return {
-        "id": system.id,
-        "name": system.name,
-        "active": system.is_active,
+        "id": grow.id,
+        "name": grow.name,
+        "active": grow.is_active,
         "plan": {"id": plan.id, "name": plan.name} if plan else None,
         "stage": (
             {
                 "id": stage.id,
                 "name": stage.name,
                 "type": stage.stage_type,
-                "number": (system.stage_index or 0) + 1,
+                "number": (grow.stage_index or 0) + 1,
                 "count": len(plan.stages),
                 "days": stage.days,
                 "outcome": stage.outcome,
@@ -116,15 +54,102 @@ def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
             if plan
             else []
         ),
-        "plans": [{"id": p.id, "name": p.name} for p in system.plans.values()],
-        "grow_day": system.grow_day,
-        "grow_started": system.grow_started.isoformat() if system.grow_started else None,
+        "grow_day": grow.grow_day,
+        "grow_started": grow.grow_started.isoformat() if grow.grow_started else None,
         "expected_end": (
-            expected_end(plan, system.stage_index or 0, started).isoformat()
+            expected_end(plan, grow.stage_index or 0, started).isoformat()
             if plan and started
             else None
         ),
-        "night_lighting": system.night_lighting,
+        "night_lighting": grow.night_lighting,
+    }
+
+
+def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(windows):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
+    """Return everything the UI and entities need to show.
+
+    `with_profiles` adds each device's 24-hour on-windows, which costs a minute-by-
+    minute scan, so only the panel asks for it.
+    """
+    now = system.now
+    ec_unit = system.ec_unit
+
+    devices = []
+    for device in system.devices:
+        drivers = system.drivers(device)
+        schedule = system.schedule_for(device)
+        want = system.desired(device)
+        actual = system.actual(device)
+        change = system.next_change(device)
+        entry: dict[str, Any] = {
+            "id": device.id,
+            "name": device.name,
+            "entity_id": device.entity_id,
+            "light": device.light,
+            "state": actual,
+            "desired": want,
+            "override": want is not None and actual is not None and want != actual,
+            "mode": schedule.mode if schedule else None,
+            "schedule": describe(schedule) if schedule else None,
+            "next_change": change.isoformat() if change else None,
+            # More than one grow schedules this device: it is on if any of them wants it on.
+            "drivers": [
+                {"grow_id": g.id, "grow": g.name, "schedule": describe(s), "mode": s.mode}
+                for g, s in drivers
+            ],
+        }
+        if with_profiles and schedule is not None:
+            entry["profile"] = _merge_windows([w for _, s in drivers for w in day_profile(s, now)])
+        devices.append(entry)
+
+    ec_low, ec_high = system.range_for("ec")
+    ranges = {m: system.range_for(m) for m in METRICS}
+    values = {
+        "ph": system.ph,
+        "ec": system.ec,
+        "temperature": system.temperature,
+        "humidity": system.humidity,
+    }
+    metrics = {}
+    for metric in METRICS:
+        low, high = ranges[metric]
+        value = values[metric]
+        if metric == "ec":
+            value, low, high = _ec(value, ec_unit), _ec(low, ec_unit), _ec(high, ec_unit)
+        metrics[metric] = {
+            "value": value,
+            "min": low,
+            "max": high,
+            "range": format_range(low, high),
+            "out_of_range": system.is_out_of_range(metric),
+            "conflict": system.range_conflict(metric),
+            "from_sensor": system.has_sensor(metric),
+            "unit": {
+                "ph": None,
+                "ec": ec_unit,
+                "temperature": system.temperature_unit,
+                "humidity": "%",
+            }[metric],
+        }
+
+    last = system.last_reading
+    tasks = system.task_items()
+    return {
+        "id": system.id,
+        "name": system.name,
+        "active": system.is_active,
+        "grows": [_grow_view(g) for g in system.grows],
+        "plans": [{"id": p.id, "name": p.name} for p in system.plans.values()],
         "schedule_enabled": system.schedule_enabled,
         "devices": devices,
         "metrics": metrics,

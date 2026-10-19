@@ -27,21 +27,24 @@ def test_slugify() -> None:
     assert slugify("!!!") == "grow"
 
 
-async def test_idle_system_publishes_unknowns_and_few_controls(h: Harness) -> None:
+async def test_idle_system_publishes_only_the_shared_entities(h: Harness) -> None:
     configs, states = build(snapshot(h.system))
-    sensor = by_key(configs, "sensor", "stage_day")
-    assert states[sensor["state_topic"]] == "None"
-    assert by_key(configs, "select", "active_plan")["options"] == ["none", "Leafy Greens"]
-    assert not any(t.endswith("_next_stage/config") for t in configs)  # only while growing
+    assert states[by_key(configs, "sensor", "measured_ph")["state_topic"]] == "None"
+    assert not any("stage" in t for t in configs)  # grow entities exist only while a grow does
 
 
-async def test_entity_ids_follow_the_system_name(h: Harness) -> None:
+async def test_entity_ids_follow_the_system_and_grow_names(h: Harness) -> None:
+    await h.system.start_grow("Leafy Greens", name="Layers 1+2")
     configs, _ = build(snapshot(h.system))
-    assert by_key(configs, "sensor", "stage_day")["default_entity_id"] == "sensor.tower_stage_day"
+    assert (
+        by_key(configs, "sensor", "stage_day")["default_entity_id"]
+        == "sensor.tower_layers_1_2_stage_day"
+    )
     assert (
         by_key(configs, "switch", "night_lighting")["default_entity_id"]
-        == "switch.tower_night_lighting"
+        == "switch.tower_layers_1_2_night_lighting"
     )
+    assert by_key(configs, "select", "active_plan")["options"] == ["none", "Leafy Greens"]
     ids = [c["unique_id"] for c in configs.values()]
     assert len(ids) == len(set(ids))
 
@@ -58,7 +61,27 @@ async def test_running_grow_state(h: Harness) -> None:
     assert value("binary_sensor", "device_d_pump_scheduled") == "ON"
     assert value("switch", "schedule_control") == "ON"
     assert value("sensor", "ph_min") == "5.8"
-    assert by_key(configs, "button", "next_stage")["command_topic"].endswith("/next_stage/set")
+    gid = h.system.grow().id
+    assert by_key(configs, "button", "next_stage")["command_topic"].endswith(
+        f"/grow_{gid}_next_stage/set"
+    )
+
+
+async def test_each_grow_gets_its_own_entities(h: Harness) -> None:
+    await h.system.start_grow("Leafy Greens", name="Layers 1+2", stage_ref=1)
+    await h.system.start_grow("Leafy Greens", name="Layers 3+4", stage_ref=3)
+    configs, states = build(snapshot(h.system))
+    stages = {
+        c["name"]: states[c["state_topic"]]
+        for t, c in configs.items()
+        if t.startswith("homeassistant/sensor/") and t.endswith("_stage/config")
+    }
+    assert stages == {
+        "Layers 1+2 current stage": "Sprouting",
+        "Layers 3+4 current stage": "Vegetative",
+    }
+    # Water readings and tasks are shared: one set of entities.
+    assert len([t for t in configs if t.endswith("_measured_ph/config")]) == 1
 
 
 async def test_ec_entities_use_the_display_unit(h: Harness) -> None:
@@ -89,22 +112,24 @@ async def test_no_record_number_when_a_sensor_provides_the_value(h: Harness) -> 
 
 async def test_commands(h: Harness) -> None:
     s = h.system
-    await handle_command(s, "active_plan", "Leafy Greens")
-    assert s.is_active
-    await handle_command(s, "next_stage", "PRESS")
-    assert s.active_stage.name == "Seedling"
-    await handle_command(s, "current_stage", "3. Vegetative")
-    assert s.active_stage.name == "Vegetative"
-    await handle_command(s, "previous_stage", "PRESS")
-    assert s.active_stage.name == "Seedling"
-    await handle_command(s, "night_lighting", "ON")
-    assert s.night_lighting
+    await s.start_grow("Leafy Greens", name="Layers 1+2")
+    key = f"grow_{s.grow().id}_"
+    await handle_command(s, key + "next_stage", "PRESS")
+    assert s.grow().stage.name == "Seedling"
+    await handle_command(s, key + "current_stage", "3. Vegetative")
+    assert s.grow().stage.name == "Vegetative"
+    await handle_command(s, key + "previous_stage", "PRESS")
+    assert s.grow().stage.name == "Seedling"
+    await handle_command(s, key + "night_lighting", "ON")
+    assert s.grow().night_lighting
+    await handle_command(s, key + "active_plan", "Leafy Greens")  # restarts the same grow
+    assert s.grow().stage.name == "Sprouting" and s.grow().name == "Layers 1+2"
     await handle_command(s, "schedule_control", "OFF")
     assert not s.schedule_enabled
     await handle_command(s, "record_ph", "6.3")
     assert s.ph == 6.3
     await handle_command(s, "water_checked", "PRESS")
-    await handle_command(s, "active_plan", "none")
+    await handle_command(s, key + "active_plan", "none")
     assert not s.is_active
     with pytest.raises(GrowError):
         await handle_command(s, "bogus", "")

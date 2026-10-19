@@ -204,12 +204,6 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         await system.manual_switch(request.match_info["did"], bool((await _body(request))["on"]))
         return _view(system)
 
-    @r.post("/api/systems/{sid}/night-lighting")
-    async def night_lighting(request: web.Request) -> web.Response:
-        system = _system(request)
-        await system.set_night_lighting(bool((await _body(request))["enabled"]))
-        return _view(system)
-
     @r.post("/api/systems/{sid}/schedule-control")
     async def schedule_control(request: web.Request) -> web.Response:
         system = _system(request)
@@ -252,6 +246,15 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         ]
         return _json({"ec_unit": unit, "readings": rows})
 
+    def role_map_of(body: dict[str, Any]) -> dict[str, list[str]]:
+        """Read {role: device id | [device ids]} from a request, dropping empty roles."""
+        roles: dict[str, list[str]] = {}
+        for role, value in (body.get("role_map") or {}).items():
+            ids = [value] if isinstance(value, str) else list(value or [])
+            if ids := [i for i in ids if i]:
+                roles[role] = ids
+        return roles
+
     def device_keys(system: GrowSystem) -> set[str]:
         return {d["id"] for d in system.data["devices"]}
 
@@ -264,23 +267,26 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             "include_past_tasks": bool(body.get("include_past_tasks", False)),
         }
 
-    @r.post("/api/systems/{sid}/grow/preview")
+    @r.post("/api/systems/{sid}/grows/preview")
     async def preview(request: web.Request) -> web.Response:
         system = _system(request)
         body = await _body(request)
-        args = start_args(body)
+        args = {
+            **start_args(body),
+            "replace": body.get("replace") or None,
+            "night_lighting": body.get("night_lighting"),
+        }
         if body.get("template"):
             # Preview a template before a plan exists for it.
             template = get_template(app.store, body["template"])
-            role_map = {role: dev for role, dev in (body.get("role_map") or {}).items() if dev}
-            data = build_from_template(template, role_map, new_id)
+            data = build_from_template(template, role_map_of(body), new_id)
             plan, problems = normalize_plan(data, new_id, device_keys(system))
             if problems:
                 return _json({"errors": problems}, 422)
             return _json(system.preview_start(plan_data=plan, **args))
         return _json(system.preview_start(plan_ref=body["plan"], **args))
 
-    @r.post("/api/systems/{sid}/grow/start")
+    @r.post("/api/systems/{sid}/grows")
     async def start(request: web.Request) -> web.Response:
         system = _system(request)
         body = await _body(request)
@@ -289,16 +295,29 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             **start_args(body),
             grow_started=_date(body.get("grow_started")),
             night_lighting=body.get("night_lighting"),
+            name=body.get("name") or None,
+            replace=body.get("replace") or None,
         )
         return _view(system)
 
-    @r.post("/api/systems/{sid}/grow/end")
-    async def end(request: web.Request) -> web.Response:
+    @r.patch("/api/systems/{sid}/grows/{gid}")
+    async def update_grow(request: web.Request) -> web.Response:
         system = _system(request)
-        await system.end_grow()
+        gid = request.match_info["gid"]
+        body = await _body(request)
+        if "name" in body:
+            await system.rename_grow(str(body["name"]), gid)
+        if "night_lighting" in body:
+            await system.set_night_lighting(bool(body["night_lighting"]), gid)
         return _view(system)
 
-    @r.post("/api/systems/{sid}/stage")
+    @r.delete("/api/systems/{sid}/grows/{gid}")
+    async def end(request: web.Request) -> web.Response:
+        system = _system(request)
+        await system.end_grow(request.match_info["gid"])
+        return _view(system)
+
+    @r.post("/api/systems/{sid}/grows/{gid}/stage")
     async def set_stage(request: web.Request) -> web.Response:
         system = _system(request)
         body = await _body(request)
@@ -306,10 +325,11 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             body["stage"],
             started=_date(body.get("started")),
             include_past_tasks=bool(body.get("include_past_tasks", False)),
+            grow=request.match_info["gid"],
         )
         return _view(system)
 
-    @r.post("/api/systems/{sid}/stage/{action}")
+    @r.post("/api/systems/{sid}/grows/{gid}/stage/{action}")
     async def stage_action(request: web.Request) -> web.Response:
         system = _system(request)
         action = {
@@ -319,7 +339,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         }.get(request.match_info["action"])
         if action is None:
             raise web.HTTPNotFound
-        await action()
+        await action(request.match_info["gid"])
         return _view(system)
 
     # -- tasks -------------------------------------------------------------------------------------
@@ -333,6 +353,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             _date(body.get("due")),
             str(body.get("note", "")),
             int(body.get("every") or 0),
+            grow=body.get("grow") or None,
         )
         return _view(system)
 
@@ -366,8 +387,8 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         body = await _body(request)
         if body.get("template"):
             template = get_template(app.store, body["template"])
-            role_map = {role: dev for role, dev in (body.get("role_map") or {}).items() if dev}
-            unknown = set(role_map.values()) - device_keys(system)
+            role_map = role_map_of(body)
+            unknown = {d for ids in role_map.values() for d in ids} - device_keys(system)
             if unknown:
                 raise GrowError("Unknown device in the role mapping")
             data = build_from_template(template, role_map, new_id, body.get("name") or None)

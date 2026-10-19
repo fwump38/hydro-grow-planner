@@ -39,6 +39,7 @@ broker itself.
    list first).
 4. **Overview → Start a grow.** Pick a template, say which of your devices plays each role, then say
    **which stage you're at and when it started**, and review exactly what will happen.
+5. Running more than one plan on the same tower? See [Several grows at once](#several-grows-at-once).
 
 ## What you get
 
@@ -54,12 +55,34 @@ always on, time window, cycle) and only that mode's fields appear, with a live 2
 Tasks are edited inline. Edits are validated, and errors show next to the field.
 
 **Templates**: browse the built-in templates (Bell Pepper, Leafy Greens, Lettuce, Pepper, Spinach,
-Tomato, from the Elfsys Grow Cloud app) stage by stage, duplicate one to edit it, save any of your
-plans as a template, and import/export JSON.
+Tomato, from the Elfsys Grow Cloud app, plus *Mixed Herbs*) stage by stage, duplicate one to edit it,
+save any of your plans as a template, and import/export JSON.
 
 Every built-in template has a pH, temperature and humidity range and an EC range for every stage, so
 the out-of-range alerts are useful from day one. *Leafy Greens* uses generic values that suit most
 leafy greens and herbs (pH 5.8–6.5, 65–75 °F, 40–70 % humidity so herbs fit too, EC 0.0–2.0 mS/cm by stage).
+
+*Mixed Herbs* is not from Elfsys. It is Leafy Greens tuned for basil, cilantro, scallions/chives and bok
+choy sharing one reservoir: pH 6.0–6.5 (where all of them overlap), 65–75 °F, 40–65 % humidity, a middling
+EC, longer sprouting and seedling stages for the slow germinators, and tasks to pinch and harvest, watch for
+bolting and re-sow cilantro.
+
+### Several grows at once
+
+A tower's layers can run different plans at the same time. **Overview → Add a grow…** starts another one;
+give each a name such as *Layers 1+2*. Grows share the **reservoir, pump, sensors and room**, and each has
+its own plan, stage, start date, tasks and night-lighting switch.
+
+- **Lights:** a template role can drive several devices (tick them in the wizard), so a pair of layers on one
+  plug is one device. Give each grow its own lights; the wizard skips lights another grow already runs.
+- **Shared devices** (normally the pump): when two grows both schedule a device, it is **on whenever either
+  wants it on**. Overview shows who schedules each device.
+- **pH, EC, temperature and humidity targets** are where the grows' ranges overlap. If they don't overlap
+  (say a lettuce and a bok choy EC range), the oldest grow's range is used and the panel says so.
+- **Tasks** carry their grow's name, in the panel and in the to-do list once there is more than one grow.
+  A task you add yourself can be for one grow or all of them.
+- Each grow gets its own stage prompt and its own set of entities; events say which grow (`grow`,
+  `grow_id`).
 
 ### Starting mid-grow
 
@@ -89,9 +112,10 @@ Created over MQTT discovery, one device per grow system. Entity IDs follow the s
 
 | Kind | Entities |
 |---|---|
-| Sensors | plan, stage, stage day, days remaining, progress, grow day, grow started, expected end, tasks due, next task, measured pH / EC (with long-term statistics), pH and EC min/max |
+| Sensors | tasks due, next task, measured pH / EC (with long-term statistics), pH and EC min/max |
 | Binary sensors | each device's scheduled state, pH / EC / temperature / humidity out of range, water reading overdue |
-| Controls | plan and stage selects, schedule control and night lighting switches, next / previous / restart stage, sync devices, water checked |
+| Controls | schedule control switch, sync devices, water checked |
+| Per grow | plan, stage, stage day, days remaining, progress, grow day, grow started and expected end sensors; plan and stage selects; a night lighting switch; next / previous / restart stage buttons. Named after the grow, e.g. `sensor.grow_system_layers_1_2_stage_day` |
 | Numbers | Record pH / Record EC, only when there's no sensor (commit on Enter) |
 
 They go *unavailable* if the app stops. EC entities use your chosen unit.
@@ -100,11 +124,11 @@ They go *unavailable* if the app stops. EC entities use your chosen unit.
 
 The app doesn't send notifications itself, because everyone notifies differently. It fires events on
 the Home Assistant bus; turn them into notifications however you like. Every payload also has
-`system_id` and `system`.
+`system_id` and `system`; events about a grow also have `grow_id` and `grow`.
 
 | Event | When |
 |---|---|
-| `hydro_grow_planner_tasks_due` | Once a day at the reminder time, if tasks are due or overdue. Payload: `plan`, `stage`, `count`, `tasks[]` (`title`, `task_type`, `note`, `due`, `overdue`, `recurring`) |
+| `hydro_grow_planner_tasks_due` | Once a day at the reminder time, if tasks are due or overdue. Payload: `plan`, `stage` (only when one grow is running), `count`, `tasks[]` (`title`, `task_type`, `note`, `due`, `overdue`, `recurring`, `grow`) |
 | `hydro_grow_planner_stage_complete_due` | Once, when a stage reaches its planned length: `stage`, `next_stage`, `expected_outcome` |
 | `hydro_grow_planner_reading_overdue` | Once, when no reading was recorded within the interval: `last_reading`, `interval_days` |
 | `hydro_grow_planner_out_of_range` / `_back_in_range` | A metric stayed out of (or back in) range for 10 minutes: `metric` (`ph`, `ec`, `temperature`, `humidity`), `value`, `min`, `max`, `unit` |

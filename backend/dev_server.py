@@ -1,4 +1,4 @@
-"""Run the panel against a fake Home Assistant, with a seeded grow.
+"""Run the panel against a fake Home Assistant, with two seeded grows (four light plugs, one shared pump).
 
     cd backend && python dev_server.py          # then open http://localhost:8099
     python dev_server.py --empty                # start with no grow systems
@@ -85,8 +85,10 @@ async def main(port: int, empty: bool = False) -> None:
     ha.app = app
 
     for entity, name, state, unit in [
-        ("switch.elfsys_center_lights", "Elfsys center lights", "off", None),
-        ("switch.elfsys_side_lights", "Elfsys side lights", "off", None),
+        ("switch.l12_center", "Layers 1+2 center", "off", None),
+        ("switch.l12_sides", "Layers 1+2 sides", "off", None),
+        ("switch.l34_center", "Layers 3+4 center", "off", None),
+        ("switch.l34_sides", "Layers 3+4 sides", "off", None),
         ("switch.elfsys_water_pump", "Elfsys water pump", "off", None),
         ("switch.garage_fan", "Garage fan", "off", None),
         ("sensor.grow_room_temperature", "Grow room temperature", "71.5", "°F"),
@@ -108,8 +110,10 @@ async def main(port: int, empty: bool = False) -> None:
     system = app.create_system("Grow System")
     system.update_config(
         devices=[
-            {"name": "Center lights", "entity_id": "switch.elfsys_center_lights", "light": True},
-            {"name": "Side lights", "entity_id": "switch.elfsys_side_lights", "light": True},
+            {"name": "Layers 1+2 center", "entity_id": "switch.l12_center", "light": True},
+            {"name": "Layers 1+2 sides", "entity_id": "switch.l12_sides", "light": True},
+            {"name": "Layers 3+4 center", "entity_id": "switch.l34_center", "light": True},
+            {"name": "Layers 3+4 sides", "entity_id": "switch.l34_sides", "light": True},
             {"name": "Water pump", "entity_id": "switch.elfsys_water_pump", "light": False},
         ],
         sensors={
@@ -119,17 +123,20 @@ async def main(port: int, empty: bool = False) -> None:
         ec_unit="ppm 500",
         todo_entity="todo.grow_tasks",
     )
-    ids = {d["entity_id"].split("_", 1)[1]: d["id"] for d in system.data["devices"]}
-    role_map = {
-        "center_lights": ids["center_lights"],
-        "side_lights": ids["side_lights"],
-        "water_pump": ids["water_pump"],
-    }
-    plan_id = new_id()
-    system.set_plan(plan_id, build_from_preset("leafy_greens", role_map, new_id))
-    await system.start_grow(
-        "Leafy Greens", "Vegetative", date.today() - timedelta(days=9), include_past_tasks=False
-    )
+    ids = {d["name"]: d["id"] for d in system.data["devices"]}
+    for key, zone, preset, stage in (
+        ("greens", "Layers 1+2", "leafy_greens", "Vegetative"),
+        ("herbs", "Layers 3+4", "mixed_herbs", "Seedling"),
+    ):
+        role_map = {
+            "center_lights": ids[f"{zone} center"],
+            "side_lights": ids[f"{zone} sides"],
+            "water_pump": ids["Water pump"],
+        }
+        system.set_plan(key, build_from_preset(preset, role_map, new_id))
+        await system.start_grow(
+            key, stage, date.today() - timedelta(days=9), name=zone, include_past_tasks=False
+        )
     await system.record_reading(ph=6.1, ec=760)
     await system.add_custom_task(
         "Order replacement air stones", due=date.today() + timedelta(days=2)

@@ -26,9 +26,9 @@ async def test_only_changes_are_sent(h: Harness) -> None:
     await h.system.start_grow("Leafy Greens")
     changed = outbox.update("sys1", *build(snapshot(h.system)))
     topics = {t for t, _, _ in changed}
-    assert any(t.endswith("/stage/state") for t in topics)
-    assert not any(t.endswith("/plan/config") for t in topics)  # unchanged discovery not resent
-    assert any(t.endswith("_next_stage/config") for t in topics)  # appears while growing
+    assert any(t.endswith("_stage/state") for t in topics)
+    assert any(t.endswith("_next_stage/config") for t in topics)  # appears with the grow
+    assert not any(t.endswith("_measured_ph/config") for t in topics)  # unchanged: not resent
 
 
 async def test_removed_entities_are_cleared(h: Harness) -> None:

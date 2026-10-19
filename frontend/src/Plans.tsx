@@ -3,9 +3,14 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "./api";
 import { PlanEditor } from "./PlanEditor";
 import { RoleMapper } from "./RoleMapper";
-import { guessRoles, invert } from "./roles";
+import { guessRoles, invert, type RoleMap } from "./roles";
 import type { Meta, Plan, Snapshot, TemplateCard } from "./types";
 import { Badge, ConfirmButton, Dialog, Field, useAction } from "./ui";
+
+/** The running grows that use a plan. */
+function runningGrows(snap: Snapshot, planId: string) {
+  return snap.grows.filter((g) => g.plan?.id === planId);
+}
 
 interface Props {
   snap: Snapshot;
@@ -33,7 +38,7 @@ export function Plans({ snap, meta, onSnap, onStart }: Props) {
         <div class="row">
           <button class="btn ghost" onClick={() => setEditing(null)}>← All plans</button>
           <h2>{plans[editing].name}</h2>
-          {snap.plan?.id === editing ? <Badge kind="ok">running</Badge> : null}
+          {runningGrows(snap, editing).length ? <Badge kind="ok">running</Badge> : null}
         </div>
         <PlanEditor
           key={editing}
@@ -42,7 +47,7 @@ export function Plans({ snap, meta, onSnap, onStart }: Props) {
           ecUnit={snap.ec_unit}
           stageTypes={meta.stage_types}
           taskTypes={meta.task_types}
-          hint={snap.plan?.id === editing ? "running — saved changes apply right away" : undefined}
+          hint={runningGrows(snap, editing).length ? "running — saved changes apply right away" : undefined}
           onSave={async (plan) => {
             const saved = (await api.savePlan(snap.id, editing, plan)).plan;
             setPlans({ ...plans, [editing]: saved });
@@ -76,12 +81,13 @@ export function Plans({ snap, meta, onSnap, onStart }: Props) {
       ) : null}
       <div class="grid">
         {entries.map(([id, plan]) => {
-          const running = snap.plan?.id === id;
+          const growing = runningGrows(snap, id);
+          const running = growing.length > 0;
           return (
             <section class="card" key={id}>
               <div class="row between">
                 <h3>{plan.name}</h3>
-                {running ? <Badge kind="ok">running</Badge> : null}
+                {running ? <Badge kind="ok">{growing.length > 1 || snap.grows.length > 1 ? growing.map((g) => g.name).join(", ") : "running"}</Badge> : null}
               </div>
               <p class="muted small">
                 {plan.stages.length} stages · {plan.stages.reduce((n, s) => n + s.days, 0)} days
@@ -89,9 +95,9 @@ export function Plans({ snap, meta, onSnap, onStart }: Props) {
               </p>
               <div class="row wrap">
                 <button class="btn" onClick={() => setEditing(id)}>Edit</button>
-                <button class="btn" onClick={() => onStart(id)}>{running ? "Change grow…" : "Start grow…"}</button>
+                <button class="btn" onClick={() => onStart(id)}>{snap.grows.length ? "Add as a grow…" : "Start grow…"}</button>
                 <ConfirmButton label="Delete" class="danger" confirmLabel="Delete"
-                  question={running ? `“${plan.name}” is running. Deleting it ends the grow.` : `Delete “${plan.name}”?`}
+                  question={running ? `“${plan.name}” is running. Deleting it ends ${growing.length > 1 ? "those grows" : "the grow"}.` : `Delete “${plan.name}”?`}
                   onConfirm={() => run(() => api.deletePlan(snap.id, id), "Deleted").then((s) => { if (s) onSnap(s); load(); })} />
               </div>
             </section>
@@ -109,7 +115,7 @@ function NewPlan({ snap, meta, onClose, onCreated }: { snap: Snapshot; meta: Met
   const [templates, setTemplates] = useState<TemplateCard[]>([]);
   const [template, setTemplate] = useState<string>("");
   const [name, setName] = useState("");
-  const [roles, setRoles] = useState<Record<string, string>>({});
+  const [roles, setRoles] = useState<RoleMap>({});
   const { run, busy } = useAction();
   const devices = snap.devices;
   useEffect(() => {
@@ -145,7 +151,7 @@ function NewPlan({ snap, meta, onClose, onCreated }: { snap: Snapshot; meta: Met
 
 function SaveAsTemplate({ snap, meta, planId, planName, onClose }: { snap: Snapshot; meta: Meta; planId: string; planName: string; onClose: () => void }) {
   const [name, setName] = useState(planName);
-  const [roles, setRoles] = useState<Record<string, string>>(() => guessRoles(Object.keys(meta.roles), snap.devices));
+  const [roles, setRoles] = useState<RoleMap>(() => guessRoles(Object.keys(meta.roles), snap.devices));
   const { run, busy } = useAction();
   return (
     <Dialog title="Save as template" onClose={onClose}>

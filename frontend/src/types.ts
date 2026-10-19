@@ -8,6 +8,8 @@ export interface MetricView {
   max: number | null;
   range: string | null;
   out_of_range: boolean | null;
+  /** The running grows' target ranges don't overlap; the oldest grow's range is shown. */
+  conflict: boolean;
   from_sensor: boolean;
   unit: string | null;
 }
@@ -23,6 +25,8 @@ export interface DeviceView {
   mode: string | null;
   schedule: string | null;
   next_change: string | null;
+  /** The grows that schedule this device. With more than one it is on if any wants it on. */
+  drivers: { grow_id: string; grow: string; schedule: string; mode: string }[];
   profile?: [number, number][];
 }
 
@@ -36,6 +40,8 @@ export interface TaskView {
   done: boolean;
   every: number;
   custom: boolean;
+  grow_id: string | null;
+  grow: string | null;
 }
 
 export interface StageView {
@@ -52,18 +58,26 @@ export interface StageView {
   progress: number | null;
 }
 
-export interface Snapshot {
+/** One running plan. A system can run several at once. */
+export interface GrowView {
   id: string;
   name: string;
   active: boolean;
   plan: { id: string; name: string } | null;
-  plans: { id: string; name: string }[];
   stage: StageView | null;
   stages: { id: string; name: string; type: string; days: number; outcome: string }[];
   grow_day: number | null;
   grow_started: string | null;
   expected_end: string | null;
   night_lighting: boolean;
+}
+
+export interface Snapshot {
+  id: string;
+  name: string;
+  active: boolean;
+  grows: GrowView[];
+  plans: { id: string; name: string }[];
   schedule_enabled: boolean;
   devices: DeviceView[];
   metrics: Record<Metric, MetricView>;
@@ -182,7 +196,7 @@ export interface Preview {
   grow_started: string;
   expected_end: string;
   stage_check_due: string;
-  devices: { name: string; desired: boolean | null }[];
+  devices: { name: string; desired: boolean | null; shared_with: string[] }[];
   tasks: { title: string; due: string; overdue: boolean; recurring: boolean }[];
   skipped_tasks: string[];
 }

@@ -72,37 +72,43 @@ async def test_config_patch_and_validation(api) -> None:
 async def test_start_wizard_flow_mid_cycle(api) -> None:
     plan_id = next(iter(api.system.data["plans"]))
     body = {"plan": plan_id, "stage": "Vegetative", "stage_started": "2026-09-10"}
-    preview = await post(api, f"{api.base}/grow/preview", body)
+    preview = await post(api, f"{api.base}/grows/preview", body)
     assert preview["stage_day"] == 11 and preview["grow_started"] == "2026-08-27"
     assert (await (await api.get(api.base)).json())["active"] is False  # preview changes nothing
 
-    started = await post(api, f"{api.base}/grow/start", {**body, "night_lighting": False})
-    assert started["active"] and started["stage"]["name"] == "Vegetative"
-    assert started["stage"]["day"] == 11 and started["grow_day"] == 25
+    started = await post(api, f"{api.base}/grows", {**body, "night_lighting": False})
+    grow = started["grows"][0]
+    assert started["active"] and grow["stage"]["name"] == "Vegetative"
+    assert grow["stage"]["day"] == 11 and grow["grow_day"] == 25
     assert any(t["title"] == "Add nutrients" for t in started["tasks"])
     # The pump runs 15 min every 3 h: eight runs a day.
     pump = started["devices"][0]["profile"]
     assert len(pump) == 8 and pump[0] == [0, 15] and pump[1] == [180, 195]
 
-    ended = await post(api, f"{api.base}/grow/end")
-    assert ended["active"] is False
+    response = await api.delete(f"{api.base}/grows/{grow['id']}")
+    assert (await response.json())["active"] is False
 
 
 async def test_stage_actions(api) -> None:
     plan_id = next(iter(api.system.data["plans"]))
-    await post(api, f"{api.base}/grow/start", {"plan": plan_id})
-    assert (await post(api, f"{api.base}/stage/advance"))["stage"]["name"] == "Seedling"
-    assert (await post(api, f"{api.base}/stage/previous"))["stage"]["name"] == "Sprouting"
-    assert (await post(api, f"{api.base}/stage", {"stage": 3}))["stage"]["name"] == "Vegetative"
-    assert (await post(api, f"{api.base}/stage/restart"))["stage"]["day"] == 1
-    assert (await api.post(f"{api.base}/stage/bogus")).status == 404
-    await post(api, f"{api.base}/stage", {"stage": 1})
-    assert (await api.post(f"{api.base}/stage/previous")).status == 400
+    started = await post(api, f"{api.base}/grows", {"plan": plan_id})
+    base = f"{api.base}/grows/{started['grows'][0]['id']}"
+
+    async def stage(path: str, body: dict | None = None) -> dict:
+        return (await post(api, f"{base}/{path}", body))["grows"][0]["stage"]
+
+    assert (await stage("stage/advance"))["name"] == "Seedling"
+    assert (await stage("stage/previous"))["name"] == "Sprouting"
+    assert (await stage("stage", {"stage": 3}))["name"] == "Vegetative"
+    assert (await stage("stage/restart"))["day"] == 1
+    assert (await api.post(f"{base}/stage/bogus")).status == 404
+    await stage("stage", {"stage": 1})
+    assert (await api.post(f"{base}/stage/previous")).status == 400
 
 
 async def test_record_reading_and_history(api) -> None:
     plan_id = next(iter(api.system.data["plans"]))
-    await post(api, f"{api.base}/grow/start", {"plan": plan_id, "stage": 3})
+    await post(api, f"{api.base}/grows", {"plan": plan_id, "stage": 3})
     await api.patch(f"{api.base}/config", json={"ec_unit": "ppm 500"})
     snap = await post(api, f"{api.base}/readings", {"ph": "6.1", "ec": 800})
     assert snap["metrics"]["ph"]["value"] == 6.1
@@ -134,7 +140,6 @@ async def test_device_switch_and_toggles(api) -> None:
     snap = await post(api, f"{api.base}/devices/{device}/switch", {"on": True})
     assert snap["devices"][0]["state"] is True
     assert (await api.post(f"{api.base}/devices/zzz/switch", json={"on": True})).status == 400
-    assert (await post(api, f"{api.base}/night-lighting", {"enabled": True}))["night_lighting"]
     assert not (await post(api, f"{api.base}/schedule-control", {"enabled": False}))[
         "schedule_enabled"
     ]
@@ -270,7 +275,7 @@ async def test_preview_a_template_before_any_plan_exists(api) -> None:
     before = dict(api.system.data["plans"])
     preview = await post(
         api,
-        f"{api.base}/grow/preview",
+        f"{api.base}/grows/preview",
         {
             "template": "builtin:leafy_greens",
             "role_map": {"water_pump": device},
@@ -281,5 +286,51 @@ async def test_preview_a_template_before_any_plan_exists(api) -> None:
     assert preview["stage"] == "Vegetative" and preview["stage_day"] == 11
     assert api.system.data["plans"] == before  # nothing was created
     assert (
-        await api.post(f"{api.base}/grow/preview", json={"template": "builtin:nope"})
+        await api.post(f"{api.base}/grows/preview", json={"template": "builtin:nope"})
     ).status == 400
+
+
+async def test_two_grows_through_the_api(api) -> None:
+    plan_id = next(iter(api.system.data["plans"]))
+    first = await post(api, f"{api.base}/grows", {"plan": plan_id, "name": "Layers 1+2"})
+    second = await post(
+        api, f"{api.base}/grows", {"plan": plan_id, "name": "Layers 3+4", "stage": 3}
+    )
+    assert [g["name"] for g in second["grows"]] == ["Layers 1+2", "Layers 3+4"]
+    one, two = (g["id"] for g in second["grows"])
+    assert one == first["grows"][0]["id"]
+
+    # Stage moves and night lighting address a grow by id.
+    advanced = await post(api, f"{api.base}/grows/{one}/stage/advance")
+    assert [g["stage"]["name"] for g in advanced["grows"]] == ["Seedling", "Vegetative"]
+    patched = await api.patch(f"{api.base}/grows/{two}", json={"night_lighting": True})
+    grows = (await patched.json())["grows"]
+    assert [g["night_lighting"] for g in grows] == [False, True]
+    renamed = await api.patch(f"{api.base}/grows/{two}", json={"name": "Herbs"})
+    assert (await renamed.json())["grows"][1]["name"] == "Herbs"
+    clash = await api.patch(f"{api.base}/grows/{two}", json={"name": "layers 1+2"})
+    assert clash.status == 400
+
+    # A task can be tagged with a grow.
+    tagged = await post(api, f"{api.base}/tasks", {"title": "Harvest", "grow": one})
+    assert next(t for t in tagged["tasks"] if t["title"] == "Harvest")["grow"] == "Layers 1+2"
+
+    # Replacing a grow keeps its place; ending one leaves the other.
+    replaced = await post(
+        api, f"{api.base}/grows", {"plan": plan_id, "name": "Salad", "replace": one}
+    )
+    assert [g["name"] for g in replaced["grows"]] == ["Salad", "Herbs"]
+    ended = await (await api.delete(f"{api.base}/grows/{one}")).json()
+    assert [g["name"] for g in ended["grows"]] == ["Herbs"] and ended["active"]
+    assert (await api.post(f"{api.base}/grows/{one}/stage/advance")).status == 400
+
+
+async def test_a_template_role_can_map_to_several_devices(api) -> None:
+    devices = [d["id"] for d in api.system.data["devices"]]
+    made = await post(
+        api,
+        f"{api.base}/plans",
+        {"template": "builtin:leafy_greens", "role_map": {"side_lights": devices[:2]}},
+    )
+    schedules = made["plan"]["stages"][0]["schedules"]
+    assert set(schedules) == set(devices[:2])

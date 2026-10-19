@@ -1,19 +1,19 @@
-// Start or change a grow: template → devices → stage and date → review.
+// Start, add or change a grow: template → devices → name, stage and date → review.
 
 import { useEffect, useMemo, useState } from "preact/hooks";
 
 import { ApiError, api, type StartArgs } from "./api";
 import { addDays, dayLabel, shortDate, today } from "./format";
 import { RoleMapper } from "./RoleMapper";
-import { guessRoles } from "./roles";
+import { guessRoles, type RoleMap } from "./roles";
 import type { Meta, Plan, Preview, Snapshot, TemplateCard } from "./types";
 import { Badge, Dialog, Field, NumberInput, Switch, useAction } from "./ui";
 
 interface Props {
   snap: Snapshot;
   meta: Meta;
-  /** Preselect a template ("builtin:…"/"custom:…") or one of this system's plans. */
-  initial?: { template?: string; plan?: string };
+  /** Preselect a template ("builtin:…"/"custom:…") or one of this system's plans, or replace a running grow (id). */
+  initial?: { template?: string; plan?: string; replace?: string };
   onClose: () => void;
   onDone: (snap: Snapshot) => void;
 }
@@ -32,12 +32,19 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
     initial?.plan ? { kind: "plan", id: initial.plan } : initial?.template ? { kind: "template", id: initial.template } : null,
   );
   const [step, setStep] = useState(source ? (initial?.plan ? 2 : 1) : 0);
-  const [roles, setRoles] = useState<Record<string, string>>(() => guessRoles(Object.keys(meta.roles), snap.devices));
+  const replacing = snap.grows.find((g) => g.id === initial?.replace);
+  // Lights another grow already runs are not offered by default; the pump is meant to be shared.
+  const inUse = (d: Snapshot["devices"][number]) => d.drivers.filter((x) => x.grow_id !== replacing?.id);
+  const [roles, setRoles] = useState<RoleMap>(() =>
+    guessRoles(Object.keys(meta.roles), snap.devices, new Set(snap.devices.filter((d) => d.light && inUse(d).length).map((d) => d.id))),
+  );
+  const [name, setName] = useState(replacing?.name ?? "");
+  const [nameEdited, setNameEdited] = useState(Boolean(replacing));
   const [stageNames, setStageNames] = useState<{ name: string; days: number }[]>([]);
-  const [stage, setStage] = useState(snap.stage?.number ?? 1);
-  const [started, setStarted] = useState(snap.stage?.started ?? today());
+  const [stage, setStage] = useState(replacing?.stage?.number ?? 1);
+  const [started, setStarted] = useState(replacing?.stage?.started ?? today());
   const [includePast, setIncludePast] = useState(false);
-  const [night, setNight] = useState(snap.night_lighting);
+  const [night, setNight] = useState(replacing?.night_lighting ?? false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const { run, busy } = useAction();
@@ -53,6 +60,7 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
     const load = source.kind === "plan" ? Promise.resolve(plans[source.id]) : api.template(source.id);
     load.then((p) => {
       if (!p) return;
+      if (!nameEdited) setName(p.name);
       setStageNames(p.stages.map((s) => ({ name: s.name, days: s.days })));
       setStage((current) => Math.min(Math.max(current, 1), p.stages.length));
     });
@@ -67,8 +75,10 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
       stage,
       stage_started: started,
       include_past_tasks: includePast,
+      replace: replacing?.id,
+      night_lighting: night,
     }),
-    [source?.kind, source?.id, roles, stage, started, includePast],
+    [source?.kind, source?.id, roles, stage, started, includePast, night],
   );
 
   useEffect(() => {
@@ -89,7 +99,7 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
       let planId = source.kind === "plan" ? source.id : "";
       let created = false;
       if (source.kind === "template") {
-        planId = (await api.createPlan(snap.id, { template: source.id, role_map: roles })).plan_id;
+        planId = (await api.createPlan(snap.id, { template: source.id, role_map: roles, name: name.trim() || undefined })).plan_id;
         created = true;
       }
       try {
@@ -99,12 +109,14 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
           stage_started: started,
           include_past_tasks: includePast,
           night_lighting: night,
+          name: name.trim() || undefined,
+          replace: replacing?.id,
         });
       } catch (err) {
         if (created) await api.deletePlan(snap.id, planId).catch(() => {});
         throw err;
       }
-    }, "Grow started");
+    }, replacing ? "Grow changed" : "Grow started");
     if (result) onDone(result);
   };
 
@@ -114,7 +126,7 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
   };
 
   return (
-    <Dialog title={snap.active ? "Change grow" : "Start a grow"} onClose={onClose}>
+    <Dialog title={replacing ? `Change ${replacing.name}` : snap.grows.length ? "Add a grow" : "Start a grow"} onClose={onClose}>
       <div class="steps" aria-label="Steps">
         {STEPS.map((label, i) => <span key={label} class={i === step ? "on" : ""}>{i + 1}. {label}</span>)}
       </div>
@@ -142,13 +154,36 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
 
       {step === 1 ? (
         <>
-          <p class="muted small">Templates describe lights and a pump by role. Choose which of your devices plays each one.</p>
-          <RoleMapper roles={meta.roles} devices={snap.devices} value={roles} onChange={setRoles} />
+          <p class="muted small">
+            Templates describe lights and a pump by role. Tick the devices that play each one; a role can drive several
+            (say, one plug for two layers). Share the pump freely between grows; give each grow its own lights.
+          </p>
+          <RoleMapper
+            roles={meta.roles}
+            devices={snap.devices}
+            value={roles}
+            onChange={setRoles}
+            note={(id) => {
+              const others = snap.devices.find((d) => d.id === id);
+              const users = others ? inUse(others).map((x) => x.grow) : [];
+              return users.length ? `also run by ${users.join(", ")}` : undefined;
+            }}
+          />
         </>
       ) : null}
 
       {step === 2 ? (
         <div class="stack">
+          <Field label="Grow name" hint="Tells grows apart on tasks and entities, e.g. “Layers 1+2”">
+            <input
+              type="text"
+              value={name}
+              onInput={(e) => {
+                setName((e.currentTarget as HTMLInputElement).value);
+                setNameEdited(true);
+              }}
+            />
+          </Field>
           <p class="muted small">Already growing? Tell it where you are so schedules and tasks line up.</p>
           <Field label="Current stage">
             <select value={stage} onChange={(e) => setStage(Number((e.currentTarget as HTMLSelectElement).value))}>
@@ -169,18 +204,18 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
             <button class="btn small" onClick={() => setStarted(addDays(today(), -7))}>A week ago</button>
           </div>
           <label class="check"><input type="checkbox" checked={includePast} onChange={(e) => setIncludePast((e.currentTarget as HTMLInputElement).checked)} />Also add tasks from days already passed (as overdue)</label>
-          <label class="row"><Switch label="Night lighting" checked={night} onChange={setNight} /> Night lighting (lights run 12 hours shifted)</label>
+          <label class="row"><Switch label="Night lighting" checked={night} onChange={setNight} /> Night lighting (this grow's lights run 12 hours shifted)</label>
         </div>
       ) : null}
 
       {step === 3 ? (
-        previewError ? <p class="error-text" role="alert">{previewError}</p> : !preview ? <p class="muted">Working it out…</p> : <Review p={preview} replacing={snap.active} />
+        previewError ? <p class="error-text" role="alert">{previewError}</p> : !preview ? <p class="muted">Working it out…</p> : <Review p={preview} replacing={replacing?.name} name={name} />
       ) : null}
 
       <div class="row" style="justify-content:space-between">
         <button class="btn" onClick={step === 0 ? onClose : back}>{step === 0 ? "Cancel" : "Back"}</button>
         {step === 3 ? (
-          <button class="btn primary" disabled={busy || !preview} onClick={confirm}>{snap.active ? "Switch to this grow" : "Start grow"}</button>
+          <button class="btn primary" disabled={busy || !preview} onClick={confirm}>{replacing ? "Switch to this plan" : "Start grow"}</button>
         ) : step > 0 ? (
           <button class="btn primary" disabled={!source || (step === 2 && stageNames.length === 0)} onClick={() => setStep(step + 1)}>Next</button>
         ) : <span />}
@@ -189,12 +224,12 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
   );
 }
 
-function Review({ p, replacing }: { p: Preview; replacing: boolean }) {
+function Review({ p, replacing, name }: { p: Preview; replacing?: string; name: string }) {
   return (
     <div class="stack" style="max-height:55vh;overflow:auto">
-      {replacing ? <div class="callout small">This replaces the running grow. Its task progress is reset.</div> : null}
+      {replacing ? <div class="callout small">This replaces {replacing}. Its task progress is reset.</div> : null}
       <div>
-        <strong>{p.plan}</strong>
+        <strong>{name.trim() && name.trim() !== p.plan ? `${name.trim()} — ${p.plan}` : p.plan}</strong>
         <div class="muted small">
           Stage {p.stage_number} of {p.stage_count}: {p.stage} — day {p.stage_day} of {p.stage_days}
           <br />Grow started {shortDate(p.grow_started)} · expected end {shortDate(p.expected_end)}
@@ -203,7 +238,9 @@ function Review({ p, replacing }: { p: Preview; replacing: boolean }) {
       <div>
         <h3>Right now</h3>
         {p.devices.map((d, i) => (
-          <div class="row" key={i}><span class="grow">{d.name}</span>{d.desired === null ? <Badge>left alone</Badge> : <Badge kind={d.desired ? "ok" : undefined}>{d.desired ? "on" : "off"}</Badge>}</div>
+          <div class="row" key={i}>
+            <span class="grow">{d.name}{d.shared_with.length ? <span class="muted small"> · shared with {d.shared_with.join(", ")}</span> : null}</span>
+            {d.desired === null ? <Badge>left alone</Badge> : <Badge kind={d.desired ? "ok" : undefined}>{d.desired ? "on" : "off"}</Badge>}</div>
         ))}
       </div>
       <div>

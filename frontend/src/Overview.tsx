@@ -2,17 +2,19 @@ import { useEffect, useState } from "preact/hooks";
 
 import { api } from "./api";
 import { addDays, clock, dayLabel, num, shortDate, today, until } from "./format";
-import type { DeviceView, Metric, MetricView, Reading, Snapshot, StageView, TaskView } from "./types";
+import type { DeviceView, GrowView, Metric, MetricView, Reading, Snapshot, StageView, TaskView } from "./types";
 import { Badge, ConfirmButton, Field, NumberInput, Switch, useAction } from "./ui";
 
 interface Props {
   snap: Snapshot;
   onSnap: (snap: Snapshot) => void;
-  onStart: () => void;
+  /** Open the wizard: to add a grow, or (with a grow id) to change that one. */
+  onStart: (replace?: string) => void;
 }
 
 export function Overview({ snap, onSnap, onStart }: Props) {
-  if (!snap.active || !snap.stage) {
+  const growing = snap.grows.filter((g) => g.stage);
+  if (!snap.active || growing.length === 0) {
     return (
       <div class="card empty">
         <h2>No grow running</h2>
@@ -20,7 +22,7 @@ export function Overview({ snap, onSnap, onStart }: Props) {
           Pick a template, choose the stage you're at and when it started, and the schedules and
           tasks follow from there.
         </p>
-        <button class="btn primary" onClick={onStart}>Start a grow</button>
+        <button class="btn primary" onClick={() => onStart()}>Start a grow</button>
         {snap.devices.length === 0 ? (
           <p class="muted small">Tip: add your lights and pump under Settings first.</p>
         ) : null}
@@ -29,7 +31,15 @@ export function Overview({ snap, onSnap, onStart }: Props) {
   }
   return (
     <>
-      <StageCard snap={snap} stage={snap.stage} onSnap={onSnap} onStart={onStart} />
+      {growing.map((g) => (
+        <StageCard key={g.id} snap={snap} grow={g} stage={g.stage as StageView} onSnap={onSnap} onStart={onStart} />
+      ))}
+      <div class="row">
+        <button class="btn" onClick={() => onStart()}>Add a grow…</button>
+        <span class="muted small">
+          {growing.length > 1 ? "Grows share the reservoir, pump and room; each has its own lights, stage and tasks." : "Run another plan alongside, e.g. a second set of layers."}
+        </span>
+      </div>
       <div class="grid wide">
         <DevicesCard snap={snap} onSnap={onSnap} />
         <WaterCard snap={snap} onSnap={onSnap} />
@@ -41,25 +51,36 @@ export function Overview({ snap, onSnap, onStart }: Props) {
 
 // -- stage ---------------------------------------------------------------------------------
 
-function StageCard({ snap, stage, onSnap, onStart }: Props & { stage: StageView }) {
+function StageCard({ snap, grow, stage, onSnap, onStart }: Props & { grow: GrowView; stage: StageView }) {
   const { run, busy } = useAction();
-  const act = (a: "advance" | "previous" | "restart") => run(() => api.stageAction(snap.id, a)).then((s) => s && onSnap(s));
-  const next = snap.stages[stage.number];
+  const act = (a: "advance" | "previous" | "restart") => run(() => api.stageAction(snap.id, grow.id, a)).then((s) => s && onSnap(s));
+  const next = grow.stages[stage.number];
   const overdue = (stage.day ?? 0) >= stage.days;
   return (
-    <section class="card" aria-label="Current stage">
+    <section class="card" aria-label={`Current stage of ${grow.name}`}>
       <div class="row wrap between">
         <div>
-          <h2>{snap.plan?.name}</h2>
+          <h2>{grow.name}</h2>
           <p class="muted small">
-            Stage {stage.number} of {stage.count} · grow day {snap.grow_day} · started{" "}
-            {shortDate(snap.grow_started)} · expected end {shortDate(snap.expected_end)}
+            {grow.plan && grow.plan.name !== grow.name ? `${grow.plan.name} · ` : ""}
+            Stage {stage.number} of {stage.count} · grow day {grow.grow_day} · started{" "}
+            {shortDate(grow.grow_started)} · expected end {shortDate(grow.expected_end)}
           </p>
         </div>
-        <button class="btn" onClick={onStart}>Change grow…</button>
+        <div class="row">
+          <button class="btn" onClick={() => onStart(grow.id)}>Change…</button>
+          <ConfirmButton
+            label="End grow"
+            class="danger"
+            confirmLabel="End grow"
+            question={`End ${grow.name}? Its tasks are removed and its devices are left as they are.`}
+            disabled={busy}
+            onConfirm={() => run(() => api.endGrow(snap.id, grow.id), "Grow ended").then((s) => s && onSnap(s))}
+          />
+        </div>
       </div>
       <div class="timeline" role="list">
-        {snap.stages.map((s, i) => {
+        {grow.stages.map((s, i) => {
           const state = i + 1 < stage.number ? "done" : i + 1 === stage.number ? "current" : "";
           const pct = state === "current" ? stage.progress ?? 0 : 0;
           return (
@@ -93,8 +114,7 @@ function StageCard({ snap, stage, onSnap, onStart }: Props & { stage: StageView 
         <ConfirmButton label="Next stage" question={next ? `Move on to ${next.name}?` : ""} disabled={busy || !next} onConfirm={() => act("advance")} class={overdue ? "" : ""} />
         <ConfirmButton label="Restart stage" question="Restart this stage from day 1 (today)?" disabled={busy} onConfirm={() => act("restart")} />
         <span class="grow" />
-        <label class="row small"><Switch label="Night lighting" checked={snap.night_lighting} onChange={(v) => run(() => api.nightLighting(snap.id, v)).then((s) => s && onSnap(s))} /> Night lighting</label>
-        <label class="row small"><Switch label="Schedule control" checked={snap.schedule_enabled} onChange={(v) => run(() => api.scheduleControl(snap.id, v)).then((s) => s && onSnap(s))} /> Schedule control</label>
+        <label class="row small"><Switch label={`Night lighting for ${grow.name}`} checked={grow.night_lighting} onChange={(v) => run(() => api.updateGrow(snap.id, grow.id, { night_lighting: v })).then((s) => s && onSnap(s))} /> Night lighting</label>
       </div>
     </section>
   );
@@ -134,18 +154,21 @@ function DevicesCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) =
   }
   return (
     <section class="card" aria-label="Devices">
-      <div class="row between">
+      <div class="row between wrap">
         <h2>Devices</h2>
-        <button class="btn small" disabled={busy} onClick={() => run(() => api.sync(snap.id), "Devices synced").then((s) => s && onSnap(s))}>Sync now</button>
+        <div class="row">
+          <label class="row small"><Switch label="Schedule control" checked={snap.schedule_enabled} onChange={(v) => run(() => api.scheduleControl(snap.id, v)).then((s) => s && onSnap(s))} /> Schedule control</label>
+          <button class="btn small" disabled={busy} onClick={() => run(() => api.sync(snap.id), "Devices synced").then((s) => s && onSnap(s))}>Sync now</button>
+        </div>
       </div>
       {snap.devices.map((d) => (
-        <Device key={d.id} d={d} busy={busy} onToggle={(on) => run(() => api.switchDevice(snap.id, d.id, on)).then((s) => s && onSnap(s))} />
+        <Device key={d.id} d={d} busy={busy} manyGrows={snap.grows.length > 1} onToggle={(on) => run(() => api.switchDevice(snap.id, d.id, on)).then((s) => s && onSnap(s))} />
       ))}
     </section>
   );
 }
 
-function Device({ d, busy, onToggle }: { d: DeviceView; busy: boolean; onToggle: (on: boolean) => void }) {
+function Device({ d, busy, manyGrows, onToggle }: { d: DeviceView; busy: boolean; manyGrows: boolean; onToggle: (on: boolean) => void }) {
   const next = until(d.next_change);
   return (
     <div class="stack" style="gap:6px">
@@ -153,9 +176,15 @@ function Device({ d, busy, onToggle }: { d: DeviceView; busy: boolean; onToggle:
         <div class="grow">
           <strong>{d.name}</strong>
           <div class="muted small">
-            {d.schedule ?? "Not managed"}
+            {d.drivers.length > 1 ? "Not managed" : d.schedule ?? "Not managed"}
+            {d.drivers.length === 1 && manyGrows ? ` · ${d.drivers[0].grow}` : ""}
             {next && d.desired !== null ? ` · ${d.desired ? "off" : "on"} in ${next}` : ""}
           </div>
+          {d.drivers.length > 1 ? (
+            <div class="muted small">
+              {d.drivers.map((x) => `${x.grow}: ${x.schedule}`).join(" · ")} — on whenever any of them wants it on
+            </div>
+          ) : null}
         </div>
         {d.override ? <Badge kind="warn">manual override</Badge> : null}
         {d.state === null ? <Badge>unavailable</Badge> : null}
@@ -184,16 +213,18 @@ function Band({ m }: { m: MetricView }) {
   );
 }
 
-function MetricTile({ metric, m }: { metric: Metric; m: MetricView }) {
+function MetricTile({ metric, m, oldest }: { metric: Metric; m: MetricView; oldest?: string }) {
   return (
     <div class="metric">
       <div class="row between">
         <span class="muted small">{LABELS[metric]}</span>
+        {m.conflict ? <Badge kind="warn">grows disagree</Badge> : null}
         {m.out_of_range === true ? <Badge kind="bad">out of range</Badge> : m.out_of_range === false ? <Badge kind="ok">in range</Badge> : null}
       </div>
       <div class="value">{m.value === null ? "—" : num(m.value, 2)}<span class="muted small"> {m.unit ?? ""}</span></div>
       <Band m={m} />
       <div class="muted small">{m.range ? `Target ${m.range}${m.unit ? " " + m.unit : ""}` : "No target range"}</div>
+      {m.conflict ? <div class="muted small">The grows' ranges don't overlap; showing {oldest}'s.</div> : null}
     </div>
   );
 }
@@ -236,9 +267,10 @@ function WaterCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
   return (
     <section class="card" aria-label="Water and climate">
       <h2>Water &amp; climate</h2>
+      {snap.grows.length > 1 ? <p class="muted small">One reservoir and room for all grows. Targets are where their ranges overlap.</p> : null}
       <div class="cols2">
         {(["ph", "ec", "temperature", "humidity"] as Metric[]).map((k) => (
-          <MetricTile key={k} metric={k} m={m[k]} />
+          <MetricTile key={k} metric={k} m={m[k]} oldest={snap.grows[0]?.name} />
         ))}
       </div>
       {phs.length > 1 || ecs.length > 1 ? (
@@ -258,7 +290,7 @@ function WaterCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
           <div class="cols2">
             {manualPh ? (
               <Field label="pH">
-                <NumberInput value={ph} onChange={setPh} step="0.1" min={0} max={14} placeholder={m.ph.value === null ? "e.g. 6.0" : String(m.ph.value)} ariaLabel="pH value" />
+                <NumberInput value={ph} onChange={setPh} step="0.01" min={0} max={14} placeholder={m.ph.value === null ? "e.g. 6.00" : String(m.ph.value)} ariaLabel="pH value" />
               </Field>
             ) : null}
             {manualEc ? (
@@ -284,12 +316,13 @@ function WaterCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
 
 // -- tasks ---------------------------------------------------------------------------------------
 
-function TaskRow({ t, onToggle, onDelete }: { t: TaskView; onToggle: () => void; onDelete: () => void }) {
+function TaskRow({ t, tagged, onToggle, onDelete }: { t: TaskView; tagged: boolean; onToggle: () => void; onDelete: () => void }) {
   return (
     <div class={`task ${t.done ? "done" : ""}`}>
       <input type="checkbox" checked={t.done} onChange={onToggle} aria-label={`${t.done ? "Reopen" : "Complete"} ${t.title}`} />
       <div class="grow">
         <div class="row wrap" style="gap:6px">
+          {tagged && t.grow ? <Badge kind="accent">{t.grow}</Badge> : null}
           <span class="title">{t.title}</span>
           {t.every ? <Badge>every {t.every} {t.every === 1 ? "day" : "days"}</Badge> : null}
           {t.overdue ? <Badge kind="bad">overdue</Badge> : null}
@@ -306,6 +339,8 @@ function TasksCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
   const { run, busy } = useAction();
   const [title, setTitle] = useState("");
   const [every, setEvery] = useState<number | null>(null);
+  const [forGrow, setForGrow] = useState("");
+  const tagged = snap.grows.length > 1;
   const [showDone, setShowDone] = useState(false);
   const t0 = today();
   const open = snap.tasks.filter((t) => !t.done);
@@ -316,6 +351,9 @@ function TasksCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
     ["Later", open.filter((t) => t.due > addDays(t0, 7))],
   ];
   const done = snap.tasks.filter((t) => t.done);
+  const row = (t: TaskView) => (
+    <TaskRow key={t.id} t={t} tagged={tagged} onToggle={() => toggle(t)} onDelete={() => apply(() => api.deleteTask(snap.id, t.id))} />
+  );
   const apply = (action: () => Promise<Snapshot>) => run(action).then((s) => s && onSnap(s));
   const toggle = (t: TaskView) => apply(() => (t.done ? api.reopenTask(snap.id, t.id) : api.completeTask(snap.id, t.id)));
   return (
@@ -326,14 +364,14 @@ function TasksCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
         items.length ? (
           <div key={name}>
             <h3 class="muted small" style="margin:6px 0 2px">{name}</h3>
-            {items.map((t) => <TaskRow key={t.id} t={t} onToggle={() => toggle(t)} onDelete={() => apply(() => api.deleteTask(snap.id, t.id))} />)}
+            {items.map(row)}
           </div>
         ) : null,
       )}
       {done.length ? (
         <div>
           <button class="btn ghost small" onClick={() => setShowDone(!showDone)}>{showDone ? "Hide" : "Show"} {done.length} done</button>
-          {showDone ? done.map((t) => <TaskRow key={t.id} t={t} onToggle={() => toggle(t)} onDelete={() => apply(() => api.deleteTask(snap.id, t.id))} />) : null}
+          {showDone ? done.map(row) : null}
         </div>
       ) : null}
       <form
@@ -341,13 +379,19 @@ function TasksCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
         onSubmit={(e) => {
           e.preventDefault();
           if (!title.trim()) return;
-          apply(() => api.addTask(snap.id, { title, every: every ?? 0 })).then(() => {
+          apply(() => api.addTask(snap.id, { title, every: every ?? 0, grow: forGrow || undefined })).then(() => {
             setTitle("");
             setEvery(null);
           });
         }}
       >
         <input type="text" class="grow" style="min-width:160px" placeholder="Add a task" aria-label="New task" value={title} onInput={(e) => setTitle((e.currentTarget as HTMLInputElement).value)} />
+        {tagged ? (
+          <select aria-label="Task is for" style="width:auto" value={forGrow} onChange={(e) => setForGrow((e.currentTarget as HTMLSelectElement).value)}>
+            <option value="">All grows</option>
+            {snap.grows.map((g) => <option value={g.id} key={g.id}>{g.name}</option>)}
+          </select>
+        ) : null}
         <span class="row small muted">repeat every <span style="width:64px"><NumberInput value={every} onChange={setEvery} min={0} step={1} placeholder="–" ariaLabel="Repeat every N days" /></span> days</span>
         <button class="btn" type="submit" disabled={busy || !title.trim()}>Add</button>
       </form>

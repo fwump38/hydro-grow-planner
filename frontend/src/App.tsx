@@ -68,7 +68,7 @@ export function App() {
   const [systems, setSystems] = useState<SystemRow[] | null>(null);
   const [sid, setSid] = useState<string | null>(remembered());
   const [snap, setSnap] = useState<Snapshot | null>(null);
-  const [wizard, setWizard] = useState<{ template?: string; plan?: string } | null>(null);
+  const [wizard, setWizard] = useState<{ template?: string; plan?: string; replace?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sidRef = useRef(sid);
   sidRef.current = sid;
@@ -179,7 +179,7 @@ export function App() {
           ) : !snap ? (
             <p class="muted">Loading…</p>
           ) : tab === "overview" ? (
-            <Overview snap={snap} onSnap={setSnap} onStart={() => setWizard({})} />
+            <Overview snap={snap} onSnap={setSnap} onStart={(replace) => setWizard({ replace })} />
           ) : tab === "plans" ? (
             <Plans snap={snap} meta={meta} onSnap={setSnap} onStart={(plan) => setWizard({ plan })} />
           ) : tab === "templates" ? (

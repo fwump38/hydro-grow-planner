@@ -46,6 +46,24 @@ def _next_task_due(snap: dict[str, Any]) -> str | None:
     return min(open_tasks) if open_tasks else None
 
 
+def _grow_adder(add: Any, grow: dict[str, Any]) -> Any:
+    """Return an `add` for one grow's entities: keys and names carry the grow."""
+    gid, label = grow["id"], grow["name"]
+
+    def gadd(platform: str, key: str, name: str, value: Any, *args: Any, **extra: Any) -> None:
+        add(
+            platform,
+            f"grow_{gid}_{key}",
+            f"{label} {name.lower()}",
+            value,
+            *args,
+            object_id=f"{slugify(label)}_{key}",
+            **extra,
+        )
+
+    return gadd
+
+
 def build(snap: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
     """Return ({config_topic: discovery_payload}, {state_topic: payload})."""
     system_id = snap["id"]
@@ -64,11 +82,12 @@ def build(snap: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, st
         platform: str, key: str, name: str, value: Any, commandable: bool = False, **extra: Any
     ) -> None:
         unique = f"{APP_SLUG}_{system_id}_{key}"
+        object_id = extra.pop("object_id", key)
         state_topic = f"{base}/{key}/state"
         payload: dict[str, Any] = {
             "name": name,
             "unique_id": unique,
-            "default_entity_id": f"{platform}.{slug}_{key}",
+            "default_entity_id": f"{platform}.{slug}_{object_id}",
             "device": device,
             "availability_topic": STATUS_TOPIC,
             **extra,
@@ -80,42 +99,88 @@ def build(snap: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, st
             payload["command_topic"] = f"{base}/{key}/set"
         configs[f"{DISCOVERY_PREFIX}/{platform}/{unique}/config"] = payload
 
-    active = snap["active"]
-    stage = snap["stage"]
     metrics = snap["metrics"]
     ec_unit = snap["ec_unit"]
 
-    # -- current grow ------------------------------------------------------------------
-    add("sensor", "plan", "Plan", snap["plan"]["name"] if snap["plan"] else None, icon="mdi:sprout")
-    add("sensor", "stage", "Current stage", stage["name"] if stage else None, icon="mdi:stairs")
-    add(
-        "sensor",
-        "stage_day",
-        "Stage day",
-        stage["day"] if stage else None,
-        icon="mdi:calendar-today",
-    )
-    add(
-        "sensor",
-        "stage_days_remaining",
-        "Stage days remaining",
-        stage["days_remaining"] if stage else None,
-        unit_of_measurement="d",
-        icon="mdi:calendar-end",
-    )
-    add(
-        "sensor",
-        "stage_progress",
-        "Stage progress",
-        stage["progress"] if stage else None,
-        unit_of_measurement="%",
-        icon="mdi:progress-clock",
-    )
-    add("sensor", "grow_day", "Grow day", snap["grow_day"], icon="mdi:calendar-range")
-    add("sensor", "grow_started", "Grow started", snap["grow_started"], device_class="date")
-    add("sensor", "expected_end", "Expected end", snap["expected_end"], device_class="date")
+    # -- tasks -------------------------------------------------------------------------------
     add("sensor", "tasks_due", "Tasks due", snap["tasks_due"], icon="mdi:clipboard-list-outline")
     add("sensor", "next_task", "Next task", _next_task_due(snap), device_class="date")
+
+    # -- each running grow ---------------------------------------------------------------------
+    plan_names = [p["name"] for p in snap["plans"]]
+    for grow in snap["grows"]:
+        gadd = _grow_adder(add, grow)
+        stage = grow["stage"]
+        gadd(
+            "sensor",
+            "plan",
+            "Plan",
+            grow["plan"]["name"] if grow["plan"] else None,
+            icon="mdi:sprout",
+        )
+        gadd(
+            "sensor", "stage", "Current stage", stage["name"] if stage else None, icon="mdi:stairs"
+        )
+        gadd(
+            "sensor",
+            "stage_day",
+            "Stage day",
+            stage["day"] if stage else None,
+            icon="mdi:calendar-today",
+        )
+        gadd(
+            "sensor",
+            "stage_days_remaining",
+            "Stage days remaining",
+            stage["days_remaining"] if stage else None,
+            unit_of_measurement="d",
+            icon="mdi:calendar-end",
+        )
+        gadd(
+            "sensor",
+            "stage_progress",
+            "Stage progress",
+            stage["progress"] if stage else None,
+            unit_of_measurement="%",
+            icon="mdi:progress-clock",
+        )
+        gadd("sensor", "grow_day", "Grow day", grow["grow_day"], icon="mdi:calendar-range")
+        gadd("sensor", "grow_started", "Grow started", grow["grow_started"], device_class="date")
+        gadd("sensor", "expected_end", "Expected end", grow["expected_end"], device_class="date")
+        gadd(
+            "select",
+            "active_plan",
+            "Plan",
+            grow["plan"]["name"] if grow["plan"] else NO_PLAN,
+            True,
+            options=[NO_PLAN, *plan_names],
+            icon="mdi:sprout",
+        )
+        stage_options = [f"{i}. {s['name']}" for i, s in enumerate(grow["stages"], 1)]
+        gadd(
+            "select",
+            "current_stage",
+            "Stage",
+            f"{stage['number']}. {stage['name']}" if stage else None,
+            True,
+            options=stage_options or [NONE_PAYLOAD],
+            icon="mdi:stairs",
+        )
+        gadd(
+            "switch",
+            "night_lighting",
+            "Night lighting",
+            grow["night_lighting"],
+            True,
+            icon="mdi:weather-night",
+        )
+        if grow["active"]:
+            for key, name, icon in (
+                ("next_stage", "Next stage", "mdi:skip-next"),
+                ("previous_stage", "Previous stage", "mdi:skip-previous"),
+                ("restart_stage", "Restart stage", "mdi:restart"),
+            ):
+                gadd("button", key, name, None, True, icon=icon)
 
     # -- water and climate -------------------------------------------------------------
     for metric, label, icon in (("ph", "pH", "mdi:ph"), ("ec", "EC", "mdi:flash-outline")):
@@ -183,60 +248,40 @@ def build(snap: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, st
         )
 
     # -- controls ------------------------------------------------------------------------
-    plan_names = [p["name"] for p in snap["plans"]]
-    add(
-        "select",
-        "active_plan",
-        "Plan",
-        snap["plan"]["name"] if snap["plan"] else NO_PLAN,
-        True,
-        options=[NO_PLAN, *plan_names],
-        icon="mdi:sprout",
-    )
-    stage_options = [f"{i}. {s['name']}" for i, s in enumerate(snap["stages"], 1)]
-    add(
-        "select",
-        "current_stage",
-        "Stage",
-        f"{stage['number']}. {stage['name']}" if stage else None,
-        True,
-        options=stage_options or [NONE_PAYLOAD],
-        icon="mdi:stairs",
-    )
     add("switch", "schedule_control", "Schedule control", snap["schedule_enabled"], True)
-    add(
-        "switch",
-        "night_lighting",
-        "Night lighting",
-        snap["night_lighting"],
-        True,
-        icon="mdi:weather-night",
-    )
-    if active:
-        for key, name, icon in (
-            ("next_stage", "Next stage", "mdi:skip-next"),
-            ("previous_stage", "Previous stage", "mdi:skip-previous"),
-            ("restart_stage", "Restart stage", "mdi:restart"),
-        ):
-            add("button", key, name, None, True, icon=icon)
     add("button", "sync_devices", "Sync devices", None, True, icon="mdi:sync")
     add("button", "water_checked", "Water checked", None, True, icon="mdi:water-check")
     return configs, states
 
 
+GROW_KEY = re.compile(r"^grow_([^_]+)_(.+)$")
+
+
 async def handle_command(system: GrowSystem, key: str, payload: str) -> None:
     """Apply a command received on an entity's command topic."""
     on = payload.upper() == "ON"
-    if key == "schedule_control":
+    if match := GROW_KEY.match(key):
+        grow, key = match.group(1), match.group(2)
+        if key == "night_lighting":
+            await system.set_night_lighting(on, grow)
+        elif key == "next_stage":
+            await system.advance_stage(grow)
+        elif key == "previous_stage":
+            await system.previous_stage(grow)
+        elif key == "restart_stage":
+            await system.restart_stage(grow)
+        elif key == "active_plan":
+            if payload == NO_PLAN:
+                await system.end_grow(grow)
+            else:
+                await system.start_grow(payload, replace=grow, name=system.grow(grow).name)
+        elif key == "current_stage":
+            number = payload.split(".", 1)[0]
+            await system.set_stage(int(number) if number.isdigit() else payload, grow=grow)
+        else:
+            raise GrowError(f"Unknown command: {key}")
+    elif key == "schedule_control":
         await system.set_schedule_enabled(on)
-    elif key == "night_lighting":
-        await system.set_night_lighting(on)
-    elif key == "next_stage":
-        await system.advance_stage()
-    elif key == "previous_stage":
-        await system.previous_stage()
-    elif key == "restart_stage":
-        await system.restart_stage()
     elif key == "sync_devices":
         await system.sync(force=True)
     elif key == "water_checked":
@@ -245,13 +290,5 @@ async def handle_command(system: GrowSystem, key: str, payload: str) -> None:
         await system.record_reading(ph=float(payload))
     elif key == "record_ec":
         await system.record_reading(ec=float(payload))
-    elif key == "active_plan":
-        if payload == NO_PLAN:
-            await system.end_grow()
-        else:
-            await system.start_grow(payload)
-    elif key == "current_stage":
-        number = payload.split(".", 1)[0]
-        await system.set_stage(int(number) if number.isdigit() else payload)
     else:
         raise GrowError(f"Unknown command: {key}")
