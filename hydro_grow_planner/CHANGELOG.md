@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Add an app icon and logo.
+
 ## 0.4.0
 
 - **Several grows at once.** A system can run more than one plan, e.g. one for layers 1+2 and another for

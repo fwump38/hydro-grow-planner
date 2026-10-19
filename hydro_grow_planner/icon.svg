@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="28" fill="#2e7d32"/>
+  <!-- sprout -->
+  <rect x="61" y="50" width="6" height="30" rx="3" fill="#ffffff"/>
+  <path d="M64 56 C64 38 50 28 32 30 C32 48 44 58 64 56 Z" fill="#ffffff"/>
+  <path d="M64 50 C64 34 76 24 94 26 C94 42 82 52 64 50 Z" fill="#c8e6c9"/>
+  <!-- water drop -->
+  <path d="M64 80 C64 80 50 96 50 104 A14 14 0 0 0 78 104 C78 96 64 80 64 80 Z" fill="#4fc3f7"/>
+</svg>
