@@ -433,7 +433,12 @@ async def test_preview_start_changes_nothing_and_describes_the_result(h: Harness
     assert preview["stage"] == "Vegetative" and preview["stage_day"] == 11
     assert preview["grow_started"] == (TODAY - timedelta(days=24)).isoformat()
     assert {t["title"] for t in preview["tasks"]} >= {"Move the grow lights", "Add nutrients"}
-    assert all(t["due"] == TODAY.isoformat() for t in preview["tasks"] if t["recurring"])
+    # A repeating task whose first day has passed is due today; the harvest hasn't started yet.
+    assert all(
+        t["due"] == TODAY.isoformat()
+        for t in preview["tasks"]
+        if t["recurring"] and t["title"] != "Harvest outer leaves"
+    )
     assert "Vegetative" in preview["skipped_tasks"]  # the day-1 info task already passed
     pump = next(d for d in preview["devices"] if d["name"] == "Water pump")
     assert pump["desired"] is True  # 12:00 falls inside a run (the pump cycles from midnight)

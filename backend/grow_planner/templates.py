@@ -30,6 +30,7 @@ def summarize(template_id: str, template: dict[str, Any]) -> dict[str, Any]:
         "temperature": format_range(template.get("temp_min"), template.get("temp_max")),
         "temp_unit": unit,
         "humidity": format_range(template.get("humidity_min"), template.get("humidity_max")),
+        "harvest_style": template.get("harvest_style", "once"),
         "ec": format_range(min(ec_mins, default=None), max(ec_maxs, default=None)),
     }
 

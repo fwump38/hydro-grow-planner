@@ -45,6 +45,8 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
   const [started, setStarted] = useState(replacing?.stage?.started ?? today());
   const [includePast, setIncludePast] = useState(false);
   const [night, setNight] = useState(replacing?.night_lighting ?? false);
+  // Changing the plan mid-grow doesn't restart the grow's clock.
+  const [keepStart, setKeepStart] = useState(true);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const { run, busy } = useAction();
@@ -77,8 +79,9 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
       include_past_tasks: includePast,
       replace: replacing?.id,
       night_lighting: night,
+      keep_grow_start: replacing ? keepStart : undefined,
     }),
-    [source?.kind, source?.id, roles, stage, started, includePast, night],
+    [source?.kind, source?.id, roles, stage, started, includePast, night, keepStart],
   );
 
   useEffect(() => {
@@ -111,6 +114,7 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
           night_lighting: night,
           name: name.trim() || undefined,
           replace: replacing?.id,
+          keep_grow_start: replacing ? keepStart : undefined,
         });
       } catch (err) {
         if (created) await api.deletePlan(snap.id, planId).catch(() => {});
@@ -204,6 +208,9 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
             <button class="btn small" onClick={() => setStarted(addDays(today(), -7))}>A week ago</button>
           </div>
           <label class="check"><input type="checkbox" checked={includePast} onChange={(e) => setIncludePast((e.currentTarget as HTMLInputElement).checked)} />Also add tasks from days already passed (as overdue)</label>
+          {replacing?.grow_started ? (
+            <label class="check"><input type="checkbox" checked={keepStart} onChange={(e) => setKeepStart((e.currentTarget as HTMLInputElement).checked)} />Keep counting the grow from {shortDate(replacing.grow_started)} (it's the same plants, just a different plan). This sets when system upkeep falls due.</label>
+          ) : null}
           <label class="row"><Switch label="Night lighting" checked={night} onChange={setNight} /> Night lighting (this grow's lights run 12 hours shifted)</label>
         </div>
       ) : null}

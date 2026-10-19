@@ -168,7 +168,7 @@ async def test_a_grow_without_a_range_does_not_loosen_the_other(h: Harness) -> N
 
 async def test_tasks_say_which_grow_they_are_for(h: Harness) -> None:
     a, b = await start_two(h)
-    checks = [t for t in h.system.task_items() if t["title"].startswith("Check if ready")]
+    checks = [t for t in h.system.task_items() if t["title"].startswith("Check if")]
     assert {t["grow"] for t in checks} == {"Layers 1+2", "Layers 3+4"}
     assert {t["grow_id"] for t in checks} == {a, b}
 

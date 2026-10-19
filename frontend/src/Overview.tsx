@@ -37,6 +37,7 @@ export function Overview({ snap, onSnap, onStart }: Props) {
       <div class="row">
         <button class="btn" onClick={() => onStart()}>Add a grow…</button>
         <span class="muted small">
+          {snap.system_day ? `System day ${snap.system_day}. ` : ""}
           {growing.length > 1 ? "Grows share the reservoir, pump and room; each has its own lights, stage and tasks." : "Run another plan alongside, e.g. a second set of layers."}
         </span>
       </div>
@@ -322,7 +323,7 @@ function TaskRow({ t, tagged, onToggle, onDelete }: { t: TaskView; tagged: boole
       <input type="checkbox" checked={t.done} onChange={onToggle} aria-label={`${t.done ? "Reopen" : "Complete"} ${t.title}`} />
       <div class="grow">
         <div class="row wrap" style="gap:6px">
-          {tagged && t.grow ? <Badge kind="accent">{t.grow}</Badge> : null}
+          {t.maintenance ? <Badge>system</Badge> : tagged && t.grow ? <Badge kind="accent">{t.grow}</Badge> : null}
           <span class="title">{t.title}</span>
           {t.every ? <Badge>every {t.every} {t.every === 1 ? "day" : "days"}</Badge> : null}
           {t.overdue ? <Badge kind="bad">overdue</Badge> : null}
@@ -330,7 +331,7 @@ function TaskRow({ t, tagged, onToggle, onDelete }: { t: TaskView; tagged: boole
         <div class="muted small">{dayLabel(t.due)}</div>
         {t.note && !t.done ? <details class="small"><summary class="muted">Details</summary><div class="note">{t.note}</div></details> : null}
       </div>
-      <button class="icon-btn" aria-label={`Delete ${t.title}`} title="Delete" onClick={onDelete}>✕</button>
+      <button class="icon-btn" aria-label={`${t.maintenance ? "Skip" : "Delete"} ${t.title}`} title={t.maintenance ? "Skip this time" : "Delete"} onClick={onDelete}>✕</button>
     </div>
   );
 }

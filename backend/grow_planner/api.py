@@ -18,7 +18,7 @@ from aiohttp import web
 
 from .app import App
 from .core import units
-from .core.const import EC_UNITS, SCHEDULE_MODES, STAGE_TYPES, TASK_TYPES
+from .core.const import EC_UNITS, HARVEST_STYLES, SCHEDULE_MODES, STAGE_TYPES, TASK_TYPES
 from .core.events_doc import EVENTS, example_payload
 from .core.models import new_id
 from .core.presets import PRESET_ROLES, build_from_template, plan_to_template
@@ -104,6 +104,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         return _json(
             {
                 "ec_units": EC_UNITS,
+                "harvest_styles": HARVEST_STYLES,
                 "stage_types": STAGE_TYPES,
                 "task_types": TASK_TYPES,
                 "schedule_modes": SCHEDULE_MODES,
@@ -187,6 +188,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             "reading_interval_days",
             "reminder_time",
             "todo_entity",
+            "maintenance",
         )
         return _json({k: d[k] for k in keys})
 
@@ -275,6 +277,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             **start_args(body),
             "replace": body.get("replace") or None,
             "night_lighting": body.get("night_lighting"),
+            "keep_start": bool(body.get("keep_grow_start")),
         }
         if body.get("template"):
             # Preview a template before a plan exists for it.
@@ -297,6 +300,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             night_lighting=body.get("night_lighting"),
             name=body.get("name") or None,
             replace=body.get("replace") or None,
+            keep_start=bool(body.get("keep_grow_start")),
         )
         return _view(system)
 

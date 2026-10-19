@@ -41,6 +41,11 @@ def _state(value: Any) -> str:
     return str(value)
 
 
+def _next_maintenance_due(snap: dict[str, Any]) -> str | None:
+    due = [m["next_due"] for m in snap["maintenance"] if m["enabled"] and m["next_due"]]
+    return min(due) if due else None
+
+
 def _next_task_due(snap: dict[str, Any]) -> str | None:
     open_tasks = [t["due"] for t in snap["tasks"] if not t["done"]]
     return min(open_tasks) if open_tasks else None
@@ -105,6 +110,17 @@ def build(snap: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, st
     # -- tasks -------------------------------------------------------------------------------
     add("sensor", "tasks_due", "Tasks due", snap["tasks_due"], icon="mdi:clipboard-list-outline")
     add("sensor", "next_task", "Next task", _next_task_due(snap), device_class="date")
+
+    # -- the system itself: how long it has been running, and its upkeep --------------------
+    add("sensor", "system_day", "System day", snap["system_day"], icon="mdi:calendar-range")
+    add(
+        "sensor",
+        "next_maintenance",
+        "Next maintenance",
+        _next_maintenance_due(snap),
+        device_class="date",
+        icon="mdi:wrench-clock",
+    )
 
     # -- each running grow ---------------------------------------------------------------------
     plan_names = [p["name"] for p in snap["plans"]]
@@ -274,7 +290,9 @@ async def handle_command(system: GrowSystem, key: str, payload: str) -> None:
             if payload == NO_PLAN:
                 await system.end_grow(grow)
             else:
-                await system.start_grow(payload, replace=grow, name=system.grow(grow).name)
+                await system.start_grow(
+                    payload, replace=grow, name=system.grow(grow).name, keep_start=True
+                )
         elif key == "current_stage":
             number = payload.split(".", 1)[0]
             await system.set_stage(int(number) if number.isdigit() else payload, grow=grow)

@@ -82,7 +82,7 @@ function Card({ c, onOpen, onUse }: { c: TemplateCard; onOpen: () => void; onUse
   return (
     <section class="card">
       <div class="row between"><h3>{c.name}</h3>{c.builtin ? null : <Badge kind="accent">mine</Badge>}</div>
-      <p class="muted small">{c.stage_count} stages · {c.total_days} days</p>
+      <p class="muted small">{c.stage_count} stages · {c.total_days} days · {c.harvest_style === "continuous" ? "harvest a little at a time" : "harvest all at once"}</p>
       <div class="row wrap" style="gap:4px">
         {c.stages.map((s, i) => <Badge key={i}>{s.name} · {s.days}d</Badge>)}
       </div>
@@ -168,6 +168,7 @@ function Detail(props: { id: string; meta: Meta; ecUnit: string; onBack: () => v
     tpl.ph_min !== null && `pH ${tpl.ph_min}–${tpl.ph_max}`,
     tpl.temp_min !== null && `${tpl.temp_min}–${tpl.temp_max} ${tpl.temp_unit}`,
     tpl.humidity_min !== null && `${tpl.humidity_min}–${tpl.humidity_max} % humidity`,
+    tpl.harvest_style === "continuous" && "harvested a little at a time",
   ].filter(Boolean);
   return (
     <div class="stack">

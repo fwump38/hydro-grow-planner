@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 
 import { api } from "./api";
 import { setDirty } from "./guard";
+import { dayLabel } from "./format";
 import type { DeviceConfig, EntityRow, Meta, Metric, Snapshot, SystemConfig, SystemRow } from "./types";
 import { ConfirmButton, Field, NumberInput, useAction } from "./ui";
 
@@ -176,6 +177,44 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged }: P
             <EntityPicker label="To-do list" value={draft.todo_entity} entities={todos} placeholder="e.g. todo.grow_tasks" onChange={(v) => edit((c) => (c.todo_entity = v))} />
           </Field>
         </div>
+      </section>
+
+      <section class="card">
+        <div class="row between">
+          <h2>System upkeep</h2>
+          <button class="btn small" onClick={() => edit((c) => c.maintenance.push({ id: `new-${Date.now()}`, title: "", note: "", task_type: "reminder", every: 14, enabled: true, covers: [] }))}>+ Add task</button>
+        </div>
+        <p class="muted small">
+          Jobs for the system itself, whatever is growing: changing the water, cleaning, calibrating. They repeat every N days of the system running
+          {snap.system_day ? ` (day ${snap.system_day} now)` : ""}, counted from the oldest running grow's start date, and from when you last did each one. The defaults are for a small
+          closed-loop kit; change them to suit yours.
+        </p>
+        {draft.maintenance.length === 0 ? <p class="muted">No upkeep tasks.</p> : null}
+        {draft.maintenance.map((m, i) => {
+          const info = snap.maintenance.find((x) => x.id === m.id);
+          return (
+            <div class="task-edit" key={m.id}>
+              <div class="cols2">
+                <Field label="Task"><input type="text" value={m.title} onInput={(e) => edit((c) => (c.maintenance[i].title = (e.currentTarget as HTMLInputElement).value))} /></Field>
+                <Field label="Every (days)">
+                  <NumberInput value={m.every} step={1} min={1} max={365} onChange={(v) => edit((c) => (c.maintenance[i].every = v ?? 14))} ariaLabel={`Days between ${m.title || "tasks"}`} />
+                </Field>
+              </div>
+              <details>
+                <summary class="muted small">How to do it</summary>
+                <textarea rows={4} aria-label={`Instructions for ${m.title}`} value={m.note} onInput={(e) => edit((c) => (c.maintenance[i].note = (e.currentTarget as HTMLTextAreaElement).value))} />
+              </details>
+              <div class="row between wrap">
+                <label class="check"><input type="checkbox" checked={m.enabled} onChange={(e) => edit((c) => (c.maintenance[i].enabled = (e.currentTarget as HTMLInputElement).checked))} />Remind me</label>
+                <span class="muted small">
+                  {info?.last_done ? `Last done ${dayLabel(info.last_done)}` : "Not done yet"}
+                  {m.enabled && info?.next_due ? ` · next ${dayLabel(info.next_due)}` : ""}
+                </span>
+                <button class="btn small danger" onClick={() => edit((c) => c.maintenance.splice(i, 1))}>Remove</button>
+              </div>
+            </div>
+          );
+        })}
       </section>
 
       <div class="save-bar">

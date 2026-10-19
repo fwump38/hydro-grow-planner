@@ -13,6 +13,8 @@ from datetime import time
 from typing import Any
 
 from .const import (
+    HARVEST_CONTINUOUS,
+    HARVEST_STYLES,
     MODE_INTERVAL,
     MODE_MANUAL,
     MODE_TIME_WINDOW,
@@ -133,6 +135,39 @@ def _task(raw: dict[str, Any], path: str, errors: list[Error], make_id: Callable
     }
 
 
+# Added to a continuous plan that has no repeating harvest task of its own.
+DEFAULT_HARVEST_TASK = {
+    "task_type": "harvest",
+    "title": "Harvest",
+    "method": "Take a little at a time; leave the plant enough to keep growing",
+    "note": "Pick only what is ripe or full size, and leave the growing point and most "
+    "of the leaves or fruit on the plant so it can keep producing.",
+    "days": [1],
+    "every": 7,
+    "until": None,
+}
+HARVEST_STAGE_TYPES = ("harvest", "fruiting", "ripening")
+
+
+def ensure_harvest_task(
+    stages: list[dict[str, Any]], make_id: Callable[[], str]
+) -> dict[str, Any] | None:
+    """Add a repeating harvest task to a continuous plan that lacks one; return it.
+
+    It goes in the last harvest, fruiting or ripening stage, else the last stage.
+    """
+    if not stages or any(
+        t["task_type"] == "harvest" and t["every"] > 0 for s in stages for t in s["tasks"]
+    ):
+        return None
+    stage = next(
+        (s for s in reversed(stages) if s["stage_type"] in HARVEST_STAGE_TYPES), stages[-1]
+    )
+    task = {**DEFAULT_HARVEST_TASK, "id": make_id(), "until": stage["days"]}
+    stage["tasks"].append(task)
+    return task
+
+
 def normalize_plan(
     data: dict[str, Any],
     make_id: Callable[[], str],
@@ -201,6 +236,13 @@ def normalize_plan(
             }
         )
 
+    harvest_style = data.get("harvest_style") or "once"
+    if harvest_style not in HARVEST_STYLES:
+        errors.append({"path": "harvest_style", "message": "Unknown harvest style"})
+        harvest_style = "once"
+    if harvest_style == HARVEST_CONTINUOUS:
+        ensure_harvest_task(stages, make_id)
+
     plan = {
         "name": name,
         "ph_min": ph_min,
@@ -211,6 +253,7 @@ def normalize_plan(
         "humidity_min": hum_min,
         "humidity_max": hum_max,
         "notes": str(data.get("notes") or ""),
+        "harvest_style": harvest_style,
         "stages": stages,
     }
     return plan, errors

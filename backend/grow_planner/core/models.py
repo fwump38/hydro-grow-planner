@@ -8,6 +8,7 @@ A plan is a plain JSON structure (stored in the app's state file):
       "temp_min": 60, "temp_max": 65, "temp_unit": "°F",   # optional
       "humidity_min": 50, "humidity_max": 70,              # optional, %
       "notes": "",
+      "harvest_style": "continuous",       # or "once" (the default)
       "stages": [
         {
           "id": "a1b2c3",
@@ -40,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import Any
 import uuid
 
-from .const import MODE_MANUAL
+from .const import HARVEST_CONTINUOUS, HARVEST_ONCE, MODE_MANUAL
 
 # Plans saved before ranges existed stored one target; widen it into a range.
 LEGACY_TARGET_MARGIN = 0.3
@@ -237,6 +238,9 @@ class Plan:
     humidity_min: float | None = None
     humidity_max: float | None = None
     notes: str = ""
+    # "once": harvest everything and start over. "continuous": keep the plants growing
+    # and harvest a little at a time (cut-and-come-again, picking ripe fruit).
+    harvest_style: str = HARVEST_ONCE
 
     @classmethod
     def from_dict(cls, plan_id: str, data: dict[str, Any]) -> Plan:
@@ -254,7 +258,17 @@ class Plan:
             humidity_min=data.get("humidity_min"),
             humidity_max=data.get("humidity_max"),
             notes=data.get("notes", ""),
+            harvest_style=(
+                HARVEST_CONTINUOUS
+                if data.get("harvest_style") == HARVEST_CONTINUOUS
+                else HARVEST_ONCE
+            ),
         )
+
+    @property
+    def continuous(self) -> bool:
+        """Return whether the plants keep growing while they are harvested a little at a time."""
+        return self.harvest_style == HARVEST_CONTINUOUS
 
     def stage_index(self, stage_id: str | None) -> int | None:
         """Return the index of a stage id, or None."""

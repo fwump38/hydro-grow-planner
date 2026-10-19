@@ -22,7 +22,11 @@ def _grow_view(grow: Grow) -> dict[str, Any]:
         "id": grow.id,
         "name": grow.name,
         "active": grow.is_active,
-        "plan": {"id": plan.id, "name": plan.name} if plan else None,
+        "plan": (
+            {"id": plan.id, "name": plan.name, "harvest_style": plan.harvest_style}
+            if plan
+            else None
+        ),
         "stage": (
             {
                 "id": stage.id,
@@ -149,6 +153,9 @@ def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
         "name": system.name,
         "active": system.is_active,
         "grows": [_grow_view(g) for g in system.grows],
+        "system_day": system.system_day,
+        "system_started": system.system_started.isoformat() if system.system_started else None,
+        "maintenance": system.maintenance_view(),
         "plans": [{"id": p.id, "name": p.name} for p in system.plans.values()],
         "schedule_enabled": system.schedule_enabled,
         "devices": devices,

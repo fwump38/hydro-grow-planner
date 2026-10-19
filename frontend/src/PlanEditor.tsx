@@ -108,6 +108,15 @@ export function PlanEditor(props: Props) {
             <input type="text" value={draft.notes} onInput={(e) => edit((p) => (p.notes = (e.currentTarget as HTMLInputElement).value))} />
           </Field>
         </div>
+        <Field
+          label="Harvest"
+          hint={draft.harvest_style === "continuous"
+            ? "Keep it growing and harvest a little at a time (cut-and-come-again, picking ripe fruit). The plan needs a repeating Harvest task in the stage where harvesting starts; one is added when you save if there isn't one. Make that stage as long as the plants stay productive."
+            : "Harvest everything at the end, then start over."}
+        >
+          <Segmented label="Harvest style" value={draft.harvest_style ?? "once"} options={[{ value: "once", label: "All at once" }, { value: "continuous", label: "A little at a time" }]}
+            onChange={(v) => edit((p) => (p.harvest_style = v))} />
+        </Field>
         <h3>Targets <span class="muted small">— used for the in/out-of-range alerts</span></h3>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
           <RangePair label="pH" lo={draft.ph_min} hi={draft.ph_max} step={0.1} errLo={err("ph_min")} errHi={err("ph_max")}

@@ -67,6 +67,46 @@ choy sharing one reservoir: pH 6.0–6.5 (where all of them overlap), 65–75 °
 EC, longer sprouting and seedling stages for the slow germinators, and tasks to pinch and harvest, watch for
 bolting and re-sow cilantro.
 
+### Harvest style
+
+Every plan is either **all at once** (harvest everything, then start over) or **a little at a time**
+(cut-and-come-again lettuce, picking ripe fruit while the plant keeps growing). Set it at the top of the
+plan editor. A little-at-a-time plan needs a repeating *Harvest* task (how much, and from where) in the stage
+where harvesting starts, and one is added when you save if there isn't one. Plants don't produce forever,
+so that stage's length is how long they stay productive; its last "ready?" check then asks whether the
+plants are spent (still regrowing? **Restart stage** to keep going; otherwise end the grow and replant).
+Nothing ends by itself.
+
+All the built-in templates are harvested a little at a time. These lengths are my estimates for a small
+indoor kit, not Elfsys figures:
+
+| Template | Harvest task | Productive for |
+|---|---|---|
+| Lettuce | a third of the hand-sized outer leaves, every 5 days, in a new 42-day *Harvest* stage | about 10–11 weeks from sowing |
+| Spinach | the same, in a 28-day *Harvest* stage (it bolts sooner) | about 10 weeks |
+| Leafy Greens | the same, from day 21 of its long Vegetative stage | about 3 months |
+| Mixed Herbs | pinch and harvest, up to a third of a plant, weekly | about 3 months |
+| Tomato, Pepper, Bell Pepper | pick ripe fruit every 3–5 days, in a Fruiting stage lengthened from 42 to 90 days | about 3 months of fruiting |
+
+### System upkeep
+
+Some jobs belong to the system, not to a plan. **Settings → System upkeep** has a repeating task list that
+applies whatever is growing. The defaults suit a deep flow (DFT) kit like the Elfsys one, which holds about 7 gal
+with two layers and about 10 gal with four. Growers' rule of thumb is that more water stays balanced longer:
+weekly under 2 gal, monthly for 2–5 gal, before flowering and after harvest for 5–10 gal, and mostly top up and
+re-balance above that. So the defaults are: change the water every 90 days (sooner if pH swings or EC creeps up,
+and shorter for a 2-layer kit), clean the pump and drains (56), calibrate the pH meter (30) and deep-clean the
+system (180, and whenever you end a grow). These are starting points, not Elfsys guidance; edit the intervals or
+instructions, turn tasks off, or add your own. Doing the deep clean also restarts the water-change and pump-clean
+clocks.
+
+Upkeep is timed by how long the **system** has been running, not by any one plan: the **System day** counts
+from the oldest running grow's start date. That date is kept when you switch a grow to another plan
+mid-grow (the wizard asks, on by default) and is backdated when you start a grow that began earlier, so a
+grow you add on day 45 gets everything that's already due. After that each task repeats `N` days after you
+check it off. Skipping one (✕) pushes it back a full interval. When nothing is growing the open tasks
+stay for you to clean up after the grow, but they stop repeating.
+
 ### Several grows at once
 
 A tower's layers can run different plans at the same time. **Overview → Add a grow…** starts another one;
@@ -112,7 +152,7 @@ Created over MQTT discovery, one device per grow system. Entity IDs follow the s
 
 | Kind | Entities |
 |---|---|
-| Sensors | tasks due, next task, measured pH / EC (with long-term statistics), pH and EC min/max |
+| Sensors | tasks due, next task, system day, next maintenance, measured pH / EC (with long-term statistics), pH and EC min/max |
 | Binary sensors | each device's scheduled state, pH / EC / temperature / humidity out of range, water reading overdue |
 | Controls | schedule control switch, sync devices, water checked |
 | Per grow | plan, stage, stage day, days remaining, progress, grow day, grow started and expected end sensors; plan and stage selects; a night lighting switch; next / previous / restart stage buttons. Named after the grow, e.g. `sensor.grow_system_layers_1_2_stage_day` |

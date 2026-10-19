@@ -59,6 +59,7 @@ def test_leafy_greens_vegetative_tasks_repeat() -> None:
         "Move the grow lights": 3,
         "Add nutrients": 3,
         "Add water if needed": 3,
+        "Harvest outer leaves": 5,
     }
 
 
@@ -80,7 +81,7 @@ def test_leafy_greens_lights_follow_the_lettuce_and_spinach_pattern() -> None:
         (s["name"], s["schedules"]["center_lights"], s["schedules"]["side_lights"])
         for s in PRESETS[key]["stages"]
     ]
-    assert lights("leafy_greens") == lights("lettuce")
+    assert lights("leafy_greens") == lights("lettuce")[:3]  # Lettuce adds a Harvest stage
     sprouting, seedling, vegetative = PRESETS["leafy_greens"]["stages"]
     assert sprouting["schedules"]["center_lights"]["mode"] == "off"
     assert seedling["schedules"]["side_lights"]["mode"] == "off"

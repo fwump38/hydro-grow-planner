@@ -69,6 +69,7 @@ def build_from_template(
         "humidity_min": template.get("humidity_min"),
         "humidity_max": template.get("humidity_max"),
         "notes": template.get("notes", ""),
+        "harvest_style": template.get("harvest_style", "once"),
         "stages": stages,
     }
 

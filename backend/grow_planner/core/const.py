@@ -37,6 +37,12 @@ STAGE_TYPES: Final = [
     "other",
 ]
 
+# How a plan is harvested: everything at once, then start over ("once"), or a little at
+# a time while the plants keep growing ("continuous": cut-and-come-again, picking fruit).
+HARVEST_ONCE: Final = "once"
+HARVEST_CONTINUOUS: Final = "continuous"
+HARVEST_STYLES: Final = [HARVEST_ONCE, HARVEST_CONTINUOUS]
+
 TASK_TYPES: Final = [
     "reminder",
     "refill",

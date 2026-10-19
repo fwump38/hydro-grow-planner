@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0
+
+- **Harvest style.** A plan is now either harvested all at once, or a little at a time while it keeps growing.
+  A little-at-a-time plan gets a repeating Harvest task (how much, and from where) in the stage where harvesting
+  starts, added on save if it lacks one. Its last-stage check asks whether the plants are spent instead of
+  "ready to finish?".
+  - All built-in templates are harvested a little at a time. **Lettuce** and **Spinach** gain a *Harvest* stage
+    (42 and 28 days), **Leafy Greens** and **Mixed Herbs** harvest in their long Vegetative stage, and **Tomato**,
+    **Pepper** and **Bell Pepper** get a 90-day Fruiting stage (was 42) with a pick-ripe-fruit task. Plans you
+    already made from them are unchanged.
+- **System upkeep tasks** that belong to the system rather than a plan, with defaults for a deep flow (DFT)
+  kit: change the water (90 days, since about 10 gal stays balanced for months), clean the pump and drains (56),
+  calibrate the pH meter (30) and deep-clean (180). Edit, switch off or add your own in Settings. They run on the system's running time
+  (new *System day* and *Next maintenance* sensors).
+- **Switching a grow's plan keeps its start date** (new "keep counting" option, on by default, also for the
+  plan select entity), so *grow day* and upkeep timing stay right.
+
 ## 0.4.1
 
 - Add an app icon and logo.

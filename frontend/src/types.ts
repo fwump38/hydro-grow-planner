@@ -40,6 +40,8 @@ export interface TaskView {
   done: boolean;
   every: number;
   custom: boolean;
+  /** System upkeep (water changes, cleaning…): belongs to the system, not to a grow. */
+  maintenance: boolean;
   grow_id: string | null;
   grow: string | null;
 }
@@ -63,7 +65,7 @@ export interface GrowView {
   id: string;
   name: string;
   active: boolean;
-  plan: { id: string; name: string } | null;
+  plan: { id: string; name: string; harvest_style: HarvestStyle } | null;
   stage: StageView | null;
   stages: { id: string; name: string; type: string; days: number; outcome: string }[];
   grow_day: number | null;
@@ -72,11 +74,37 @@ export interface GrowView {
   night_lighting: boolean;
 }
 
+/** "once": harvest everything and start over. "continuous": keep it growing, harvest a little at a time. */
+export type HarvestStyle = "once" | "continuous";
+
+/** A repeating job for the system itself (not for a plan): changing the water, cleaning, calibrating. */
+export interface MaintenanceTask {
+  id: string;
+  title: string;
+  note: string;
+  task_type: string;
+  /** Repeats this many days after the system started running, or after it was last done. */
+  every: number;
+  enabled: boolean;
+  /** Doing this also does these (by id), so their clocks restart. */
+  covers: string[];
+}
+
+export interface MaintenanceView extends MaintenanceTask {
+  last_done: string | null;
+  days_since: number | null;
+  next_due: string | null;
+}
+
 export interface Snapshot {
   id: string;
   name: string;
   active: boolean;
   grows: GrowView[];
+  /** Days the system has been running: counted from the oldest running grow's start. */
+  system_day: number | null;
+  system_started: string | null;
+  maintenance: MaintenanceView[];
   plans: { id: string; name: string }[];
   schedule_enabled: boolean;
   devices: DeviceView[];
@@ -111,6 +139,7 @@ export interface SystemConfig {
   reading_interval_days: number;
   reminder_time: string;
   todo_entity: string | null;
+  maintenance: MaintenanceTask[];
 }
 
 export interface Schedule {
@@ -154,6 +183,7 @@ export interface Plan {
   humidity_min: number | null;
   humidity_max: number | null;
   notes: string;
+  harvest_style: HarvestStyle;
   stages: Stage[];
 }
 
@@ -169,6 +199,7 @@ export interface TemplateCard {
   temp_unit: string | null;
   humidity: string | null;
   ec: string | null;
+  harvest_style: HarvestStyle;
 }
 
 export type Template = Plan & { id: string; builtin?: boolean };
@@ -203,6 +234,7 @@ export interface Preview {
 
 export interface Meta {
   ec_units: string[];
+  harvest_styles: HarvestStyle[];
   stage_types: string[];
   task_types: string[];
   schedule_modes: string[];

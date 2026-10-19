@@ -60,6 +60,8 @@ export interface StartArgs {
   grow_started?: string;
   include_past_tasks?: boolean;
   night_lighting?: boolean;
+  /** With `replace`: keep counting the grow from the replaced grow's start date. */
+  keep_grow_start?: boolean;
 }
 
 export const api = {
