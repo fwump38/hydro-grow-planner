@@ -35,8 +35,14 @@ class FakeTodo:
         return sorted(i.summary for i in self.items.values() if not i.completed)
 
 
-async def setup(h: Harness) -> tuple[TodoSync, FakeTodo]:
+async def setup(
+    h: Harness, existing: list[tuple[str, str | None]] | None = None, adopt: bool = False
+) -> tuple[TodoSync, FakeTodo]:
     todo = FakeTodo()
+    for summary, due in existing or []:
+        await todo.add_item(summary, due, "")
+    h.system.data["todo_entity"] = "todo.grow"
+    h.system.data["todo_adopt"] = adopt
     sync = TodoSync(h.system, todo)
     await h.system.start_grow("Leafy Greens", stage_ref=3)
     await sync.reconcile()
@@ -75,7 +81,7 @@ async def test_completing_in_the_panel_checks_it_off_in_ha(h: Harness) -> None:
 
 
 async def test_items_made_in_ha_are_adopted_as_custom_tasks(h: Harness) -> None:
-    sync, todo = await setup(h)
+    sync, todo = await setup(h, adopt=True)
     await todo.add_item("Order nutrients", "2026-09-25", "pH down too")
     await sync.reconcile()
     task = next(t for t in h.system.task_items() if t["title"] == "Order nutrients")
@@ -111,3 +117,48 @@ async def test_stage_change_swaps_the_stage_tasks_in_ha(h: Harness) -> None:
     assert "Check if ready for Seedling" in summaries
     assert "Add nutrients" not in summaries
     assert "Check if ready to finish the grow" not in summaries
+
+
+async def test_items_made_in_ha_are_left_alone_by_default(h: Harness) -> None:
+    sync, todo = await setup(h)
+    await todo.add_item("Buy milk", None, "")
+    await sync.reconcile()
+    assert all(t["title"] != "Buy milk" for t in h.system.task_items())
+    assert "Buy milk" in todo.open_summaries()
+
+
+async def test_existing_items_are_never_touched_or_claimed(h: Harness) -> None:
+    # A shared reminders list: one item shares a name and date with a task of ours.
+    today = h.system.today.isoformat()
+    sync, todo = await setup(
+        h, existing=[("Buy milk", None), ("Add nutrients", today), ("Old chore", "2020-01-01")]
+    )
+    mine = {i.uid for i in todo.items.values() if i.uid not in ("u1", "u2", "u3")}
+    assert len(mine) > 0
+    for uid in ("u1", "u2", "u3"):
+        await todo.set_completed(uid, True)  # the owner ticks their own items off
+    await sync.reconcile()
+    await sync.reconcile()
+    assert {i.summary for i in todo.items.values() if i.uid in ("u1", "u2", "u3")} == {
+        "Buy milk",
+        "Add nutrients",
+        "Old chore",
+    }
+    assert all(t["title"] not in ("Buy milk", "Old chore") for t in h.system.task_items())
+    assert "Add nutrients" in {i.summary for i in todo.items.values() if i.uid in mine}
+    # Deleting a task removes only its own item.
+    task = next(t for t in h.system.task_items() if t["title"] == "Move the grow lights")
+    h.system.delete_task(task["id"])
+    await sync.reconcile()
+    assert {"u1", "u2", "u3"} <= set(todo.items)
+    assert "Move the grow lights" not in todo.open_summaries()
+
+
+async def test_turning_adoption_on_does_not_import_the_backlog(h: Harness) -> None:
+    sync, todo = await setup(h, existing=[("Buy milk", None)])
+    h.system.data["todo_adopt"] = True
+    await sync.reconcile()
+    assert all(t["title"] != "Buy milk" for t in h.system.task_items())
+    await todo.add_item("Order nutrients", None, "")
+    await sync.reconcile()
+    assert any(t["title"] == "Order nutrients" for t in h.system.task_items())

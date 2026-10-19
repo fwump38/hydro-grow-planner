@@ -139,6 +139,7 @@ export interface SystemConfig {
   reading_interval_days: number;
   reminder_time: string;
   todo_entity: string | null;
+  todo_adopt: boolean;
   maintenance: MaintenanceTask[];
 }
 

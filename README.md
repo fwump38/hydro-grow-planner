@@ -35,8 +35,10 @@ broker itself.
    which are grow lights. Optionally add pH, EC, room temperature and humidity sensors; without a
    sensor you record the value by hand.
 2. **Settings → Water readings:** choose your **EC unit** (below).
-3. **Settings → Tasks:** pick a Home Assistant to-do list to mirror tasks into (add a *Local To-do*
-   list first).
+3. **Settings → Tasks:** pick a Home Assistant to-do list to mirror tasks into: a *Local To-do* list, or
+   any other to-do entity such as an iCloud Reminders list. The app only touches items it created itself;
+   anything already on the list is left alone. Items you add to the list later become tasks only if you
+   tick *Turn items I add to this list into tasks*.
 4. **Overview → Start a grow.** Pick a template, say which of your devices plays each role, then say
    **which stage you're at and when it started**, and review exactly what will happen.
 5. Running more than one plan on the same tower? See [Several grows at once](#several-grows-at-once).

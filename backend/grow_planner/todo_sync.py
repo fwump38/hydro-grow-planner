@@ -7,8 +7,12 @@ The app owns the tasks; the to-do list is a view that can also check things off.
 - an item checked off in HA completes its instance, which schedules the next one of
   a repeating task (and the next pass adds that item)
 - an instance completed in the panel is checked off in HA
-- an item created in HA is adopted as a one-off custom task
 - an item whose instance is gone (pruned, deleted) is removed from HA
+- an item created in HA is adopted as a one-off custom task, only if the system opts in
+  (`todo_adopt`), and never one that was already on the list before
+
+The list may be someone's everyday reminders list, so the sync only ever touches items it
+created itself (the ones in `rt["todo_map"]`). Everything else it sees is left alone.
 
 Deleting an item in HA does not delete the task: it is added back. Delete tasks in
 the panel, which is also how a repeating task is stopped.
@@ -68,6 +72,19 @@ class TodoSync:
         self.port = port
 
     @property
+    def _foreign(self) -> set[str]:
+        """Return the uids of items that were on the list before we looked, or are not ours."""
+        entity = self.system.data.get("todo_entity")
+        record = self.system.rt.get("todo_foreign")
+        if not isinstance(record, dict) or record.get("entity") != entity:
+            record = {"entity": entity, "uids": []}
+            self.system.rt["todo_foreign"] = record
+        return set(record["uids"])
+
+    def _remember_foreign(self, uids: set[str]) -> None:
+        self.system.rt["todo_foreign"]["uids"] = sorted(uids)
+
+    @property
     def _map(self) -> dict[str, str]:
         return self.system.rt.setdefault("todo_map", {})
 
@@ -76,6 +93,10 @@ class TodoSync:
         system = self.system
         items = {i.uid: i for i in await self.port.list_items()}
         mapping = self._map
+        foreign = self._foreign
+        if not mapping and not foreign:
+            # First look at this list: whatever is on it already is not ours.
+            foreign = set(items)
         instances = {i["id"]: i for i in system.rt["instances"]}
         shown = {t["id"]: t for t in system.task_items()}
 
@@ -112,14 +133,15 @@ class TodoSync:
             if instance_id in mapping or task["done"]:
                 continue
             summary = _summary(task, tagged)
+            before = set(items)
             await self.port.add_item(summary, task["due"], task["note"])
             items = {i.uid: i for i in await self.port.list_items()}
-            taken = set(mapping.values())
+            # Our item is the new one; never claim an item that was already there.
             match = next(
                 (
                     i
                     for i in items.values()
-                    if i.uid not in taken
+                    if i.uid not in before
                     and not i.completed
                     and i.summary == summary
                     and (i.due or None) == (task["due"] or None)
@@ -129,12 +151,19 @@ class TodoSync:
             if match is not None:
                 mapping[instance_id] = match.uid
 
-        # 4. Adopt items made in HA.
+        # 4. Adopt items made in HA, if asked to; otherwise just note that they aren't ours.
+        # Items seen while adopting is off are never imported later, so switching it on
+        # doesn't pull in the whole existing list.
         taken = set(mapping.values())
+        adopt = bool(system.data.get("todo_adopt"))
         for item in items.values():
-            if item.uid in taken or item.completed:
+            if item.uid in taken:
+                continue
+            if not adopt or item.completed or item.uid in foreign:
+                foreign.add(item.uid)
                 continue
             due = date.fromisoformat(item.due[:10]) if item.due else None
             instance_id = await system.add_custom_task(item.summary, due, item.description)
             mapping[instance_id] = item.uid
+        self._remember_foreign(foreign & set(items))
         system._on_save()

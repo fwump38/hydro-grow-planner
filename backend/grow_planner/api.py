@@ -188,6 +188,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             "reading_interval_days",
             "reminder_time",
             "todo_entity",
+            "todo_adopt",
             "maintenance",
         )
         return _json({k: d[k] for k in keys})

@@ -173,9 +173,12 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged }: P
         <h2>Tasks &amp; reminders</h2>
         <div class="grid">
           <Field label="Daily reminder time"><input type="time" value={draft.reminder_time.slice(0, 5)} onInput={(e) => edit((c) => (c.reminder_time = (e.currentTarget as HTMLInputElement).value))} /></Field>
-          <Field label="Mirror tasks to this Home Assistant to-do list" hint="Add a “Local To-do” list in Home Assistant first, then pick it here. Checking a task off there works too.">
+          <Field label="Mirror tasks to this Home Assistant to-do list" hint="Any to-do list works, e.g. a Local To-do list or an iCloud Reminders list. The app only adds, checks off and removes its own items; it never changes anything else on the list. Checking a task off there works too.">
             <EntityPicker label="To-do list" value={draft.todo_entity} entities={todos} placeholder="e.g. todo.grow_tasks" onChange={(v) => edit((c) => (c.todo_entity = v))} />
           </Field>
+          {draft.todo_entity ? (
+            <label class="check"><input type="checkbox" checked={!!draft.todo_adopt} onChange={(e) => edit((c) => (c.todo_adopt = (e.currentTarget as HTMLInputElement).checked))} />Turn items I add to this list into tasks (only items added after you switch this on)</label>
+          ) : null}
         </div>
       </section>
 

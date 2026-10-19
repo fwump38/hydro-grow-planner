@@ -62,6 +62,7 @@ CONFIG_KEYS = {
     "reading_interval_days",
     "reminder_time",
     "todo_entity",
+    "todo_adopt",
     "maintenance",
 }
 # What describes one stage run; saved to history when a stage is left.
@@ -214,6 +215,7 @@ def new_system_data(system_id: str, name: str) -> dict[str, Any]:
         "reading_interval_days": DEFAULT_READING_INTERVAL_DAYS,
         "reminder_time": DEFAULT_REMINDER_TIME,
         "todo_entity": None,
+        "todo_adopt": False,
         "maintenance": default_maintenance(),
         "plans": {},
         "runtime": {},
@@ -245,6 +247,7 @@ class GrowSystem:
         self._plans_cache: dict[str, Plan] | None = None
 
         data.setdefault("maintenance", default_maintenance())
+        data.setdefault("todo_adopt", False)
         rt = data.setdefault("runtime", {})
         rt.setdefault("maintenance", {})
         rt.setdefault("schedule_enabled", True)
@@ -416,6 +419,8 @@ class GrowSystem:
             if entity is not None and not str(entity).startswith("todo."):
                 raise GrowError("Pick a to-do list entity")
             clean["todo_entity"] = entity
+        if "todo_adopt" in fields:
+            clean["todo_adopt"] = bool(fields["todo_adopt"])
         if "maintenance" in fields:
             tasks, problems = normalize_maintenance(fields["maintenance"], self._make_id)
             if problems:

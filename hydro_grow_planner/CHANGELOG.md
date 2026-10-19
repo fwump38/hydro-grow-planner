@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1
+
+- **Safe to point at a shared to-do list** (e.g. your iCloud Reminders list). The sync only adds, checks
+  off and removes the items it created; items already on the list are never adopted, changed or removed,
+  even if they share a name with a task.
+- **Importing items you add on the list is now opt-in** (*Turn items I add to this list into tasks* in
+  Settings). It was always on before; turn it on again if you relied on it. It only imports items added
+  after you switch it on.
+
 ## 0.5.0
 
 - **Harvest style.** A plan is now either harvested all at once, or a little at a time while it keeps growing.
