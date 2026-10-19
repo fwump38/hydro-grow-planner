@@ -1,7 +1,6 @@
 // Typed client for the backend. URLs are relative so the panel works under any
 // Home Assistant ingress path.
 
-import type { RoleMap } from "./roles";
 import type {
   EntityRow,
   FieldError,
@@ -48,9 +47,9 @@ const patch = <T>(path: string, body: unknown) => request<T>("PATCH", path, body
 const del = <T>(path: string) => request<T>("DELETE", path);
 
 export interface StartArgs {
-  plan?: string;
   template?: string;
-  role_map?: RoleMap;
+  /** Zones (ids) whose lights run this grow; the pump is added automatically. */
+  zones?: string[];
   /** Label for the new grow, e.g. "Layers 1+2". */
   name?: string;
   /** Replace this grow (id) instead of adding another. */
@@ -103,25 +102,16 @@ export const api = {
   reopenTask: (id: string, task: string) => post<Snapshot>(`systems/${id}/tasks/${task}/reopen`),
   deleteTask: (id: string, task: string) => del<Snapshot>(`systems/${id}/tasks/${task}`),
 
-  plans: (id: string) => get<Record<string, Plan>>(`systems/${id}/plans`),
-  createPlan: (
-    id: string,
-    args: { template?: string; role_map?: RoleMap; name?: string },
-  ) => post<{ plan_id: string; plan: Plan }>(`systems/${id}/plans`, args),
-  savePlan: (id: string, plan: string, data: Plan) =>
-    put<{ plan: Plan }>(`systems/${id}/plans/${plan}`, data),
-  deletePlan: (id: string, plan: string) => del<Snapshot>(`systems/${id}/plans/${plan}`),
+  growPlan: (id: string, grow: string) => get<Plan>(`systems/${id}/grows/${grow}/plan`),
+  saveGrowPlan: (id: string, grow: string, data: Plan) =>
+    put<{ plan: Plan }>(`systems/${id}/grows/${grow}/plan`, data),
 
   templates: () => get<TemplateCard[]>("templates"),
   template: (id: string) => get<Template>(`templates/${id}`),
   duplicateTemplate: (id: string) => post<Template>("templates", { duplicate: id }),
   importTemplate: (template: unknown) => post<Template>("templates", { template }),
-  templateFromPlan: (spec: {
-    system_id: string;
-    plan_id: string;
-    device_roles: Record<string, string>;
-    name?: string;
-  }) => post<Template>("templates", { from_plan: spec, name: spec.name }),
+  templateFromGrow: (spec: { system_id: string; grow_id: string; name?: string }) =>
+    post<Template>("templates", { from_grow: spec, name: spec.name }),
   saveTemplate: (id: string, data: Plan) => put<Template>(`templates/${id}`, data),
   deleteTemplate: (id: string) => del<unknown>(`templates/${id}`),
 

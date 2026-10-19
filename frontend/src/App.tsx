@@ -4,16 +4,16 @@ import { api, watch } from "./api";
 import { Activity } from "./Activity";
 import { confirmLeave } from "./guard";
 import { Overview } from "./Overview";
-import { Plans } from "./Plans";
+import { GrowPlan } from "./GrowPlan";
 import { Settings } from "./Settings";
+import { Setup } from "./Setup";
 import { Templates } from "./Templates";
 import { Wizard } from "./Wizard";
 import type { Meta, Snapshot, SystemRow } from "./types";
-import { ToastContext, useAction, useToastState } from "./ui";
+import { ToastContext, useToastState } from "./ui";
 
 const TABS = [
   ["overview", "Overview"],
-  ["plans", "Plan"],
   ["templates", "Templates"],
   ["activity", "Activity"],
   ["settings", "Settings"],
@@ -33,34 +33,6 @@ function remembered(): string | null {
   }
 }
 
-function Welcome({ onCreated }: { onCreated: (id: string) => void }) {
-  const [name, setName] = useState("Grow System");
-  const { run, busy } = useAction();
-  return (
-    <form
-      class="card empty"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        const created = await run(() => api.createSystem(name));
-        if (created) onCreated(created.id);
-      }}
-    >
-      <h2>Welcome</h2>
-      <p class="muted">
-        A grow system is one tower or tray: its lights, pump and sensors. Name yours, then add the devices next.
-      </p>
-      <input
-        type="text"
-        aria-label="System name"
-        style="max-width:320px"
-        value={name}
-        onInput={(e) => setName((e.currentTarget as HTMLInputElement).value)}
-      />
-      <button class="btn primary" type="submit" disabled={busy || !name.trim()}>Create grow system</button>
-    </form>
-  );
-}
-
 export function App() {
   const { toast, notify } = useToastState();
   const [tab, setTab] = useState<Tab>(readHash());
@@ -68,7 +40,10 @@ export function App() {
   const [systems, setSystems] = useState<SystemRow[] | null>(null);
   const [sid, setSid] = useState<string | null>(remembered());
   const [snap, setSnap] = useState<Snapshot | null>(null);
-  const [wizard, setWizard] = useState<{ template?: string; plan?: string; replace?: string } | null>(null);
+  const [wizard, setWizard] = useState<{ template?: string; replace?: string } | null>(null);
+  const [editGrow, setEditGrow] = useState<string | null>(null);
+  // Guided setup: shown for the first system, and when asked for (`id` is set once the system exists).
+  const [setup, setSetup] = useState<{ id?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sidRef = useRef(sid);
   sidRef.current = sid;
@@ -163,31 +138,38 @@ export function App() {
           </nav>
         </header>
         <main class="page">
-          {systems.length === 0 ? (
-            <Welcome
+          {setup || systems.length === 0 ? (
+            <Setup
+              key={setup?.id ?? "new"}
+              meta={meta}
+              systemId={setup?.id}
               onCreated={async (id) => {
                 try {
                   localStorage.setItem("grow-system", id);
                 } catch {
                   /* private mode */
                 }
+                setSetup({ id });
                 setSid(id);
                 await loadSystems();
-                go("settings");
+              }}
+              onDone={() => {
+                setSetup(null);
+                go("overview");
               }}
             />
           ) : !snap ? (
             <p class="muted">Loading…</p>
+          ) : tab === "overview" && editGrow ? (
+            <GrowPlan snap={snap} meta={meta} growId={editGrow} onBack={() => setEditGrow(null)} />
           ) : tab === "overview" ? (
-            <Overview snap={snap} onSnap={setSnap} onStart={(replace) => setWizard({ replace })} />
-          ) : tab === "plans" ? (
-            <Plans snap={snap} meta={meta} onSnap={setSnap} onStart={(plan) => setWizard({ plan })} />
+            <Overview snap={snap} onSnap={setSnap} onStart={(replace) => setWizard({ replace })} onEditPlan={setEditGrow} />
           ) : tab === "templates" ? (
             <Templates meta={meta} ecUnit={snap.ec_unit} onUse={(template) => setWizard({ template })} />
           ) : tab === "activity" ? (
             <Activity snap={snap} />
           ) : (
-            <Settings snap={snap} meta={meta} systems={systems} onSnap={setSnap} onSelect={select} onChanged={loadSystems} />
+            <Settings snap={snap} meta={meta} systems={systems} onSnap={setSnap} onSelect={select} onChanged={loadSystems} onSetup={(id) => setSetup({ id })} />
           )}
         </main>
         {wizard && snap ? (
@@ -196,6 +178,10 @@ export function App() {
             meta={meta}
             initial={wizard}
             onClose={() => setWizard(null)}
+            onSetupZones={() => {
+              setWizard(null);
+              setSetup({ id: snap.id });
+            }}
             onDone={(next) => {
               setSnap(next);
               setWizard(null);

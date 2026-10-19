@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import date, timedelta
 
 import pytest
@@ -28,15 +29,23 @@ def two_zones(h: Harness) -> None:
     for entity in ("switch.center2", "switch.side2"):
         h.system.set_state(entity, EntityState("off"))
     roles = {"center_lights": "d_center2", "side_lights": "d_side2", "water_pump": "d_pump"}
-    h.system.data["plans"]["herbs"] = build_from_preset("leafy_greens", roles, new_id)
-    h.system.data["plans"]["herbs"]["name"] = "Herbs"
-    h.system.set_plan("herbs", h.system.data["plans"]["herbs"])
+    h.plans["Herbs"] = build_from_preset("leafy_greens", roles, new_id)
+    h.plans["Herbs"]["name"] = "Herbs"
+
+
+def edit_plan(h: Harness, grow: str, mutate=None, **changes) -> None:
+    """Change a running grow's own plan, as the plan editor does."""
+    plan = copy.deepcopy(h.system.grow(grow).data["plan"])
+    if mutate:
+        mutate(plan)
+    plan.update(changes)
+    h.system.set_grow_plan(grow, plan)
 
 
 async def start_two(h: Harness) -> tuple[str, str]:
     two_zones(h)
-    a = await h.system.start_grow("Leafy Greens", name="Layers 1+2", stage_ref=3)
-    b = await h.system.start_grow("Herbs", name="Layers 3+4", stage_ref=1)
+    a = await h.start("Leafy Greens", name="Layers 1+2", stage_ref=3)
+    b = await h.start("Herbs", name="Layers 3+4", stage_ref=1)
     return a, b
 
 
@@ -66,12 +75,12 @@ async def test_the_grow_must_be_named_when_there_are_several(h: Harness) -> None
 async def test_grow_names_are_unique_and_replacing_keeps_the_place(h: Harness) -> None:
     a, b = await start_two(h)
     with pytest.raises(GrowError, match="already a grow called"):
-        await h.system.start_grow("Herbs", name="layers 1+2")
+        await h.start("Herbs", name="layers 1+2")
     with pytest.raises(GrowError, match="already a grow called"):
         await h.system.rename_grow("Layers 1+2", b)
 
     await h.system.rename_grow("Salad", a)
-    again = await h.system.start_grow("Leafy Greens", name="Salad", replace=a)
+    again = await h.start("Leafy Greens", name="Salad", replace=a)
     assert again == a and h.system.grow(a).stage.name == "Sprouting"
     assert [g.name for g in h.system.grows] == ["Salad", "Layers 3+4"]  # still the oldest
 
@@ -79,26 +88,28 @@ async def test_grow_names_are_unique_and_replacing_keeps_the_place(h: Harness) -
 async def test_shared_pump_is_on_when_either_grow_wants_it(h: Harness) -> None:
     await start_two(h)
     pump = next(d for d in h.system.devices if d.id == "d_pump")
+
     # 12:00 is inside a pump run for both; make the herbs plan keep the pump off.
-    herbs = h.system.data["plans"]["herbs"]
-    for stage in herbs["stages"]:
-        stage["schedules"]["d_pump"] = {"mode": "off"}
-    h.system.set_plan("herbs", herbs)
+    def pump_off(plan):
+        for stage in plan["stages"]:
+            stage["schedules"]["d_pump"] = {"mode": "off"}
+
+    edit_plan(h, "Layers 3+4", pump_off)
     assert [g.name for g, _ in h.system.drivers(pump)] == ["Layers 1+2", "Layers 3+4"]
     assert h.system.desired(pump) is True  # Layers 1+2 wants it on
 
-    for stage in h.system.data["plans"]["leafy"]["stages"]:
-        stage["schedules"]["d_pump"] = {"mode": "off"}
-    h.system.set_plan("leafy", h.system.data["plans"]["leafy"])
+    edit_plan(h, "Layers 1+2", pump_off)
     assert h.system.desired(pump) is False
 
 
 async def test_an_unmanaged_device_does_not_veto_a_managed_one(h: Harness) -> None:
     await start_two(h)
-    herbs = h.system.data["plans"]["herbs"]
-    for stage in herbs["stages"]:
-        stage["schedules"].pop("d_pump")  # not managed by this grow
-    h.system.set_plan("herbs", herbs)
+
+    def unmanage_pump(plan):
+        for stage in plan["stages"]:
+            stage["schedules"].pop("d_pump")  # not managed by this grow
+
+    edit_plan(h, "Layers 3+4", unmanage_pump)
     pump = next(d for d in h.system.devices if d.id == "d_pump")
     assert [g.name for g, _ in h.system.drivers(pump)] == ["Layers 1+2"]
     assert h.system.desired(pump) is True
@@ -132,26 +143,22 @@ async def test_a_new_grow_starts_in_daylight_and_a_replacement_inherits(h: Harne
     a, _ = await start_two(h)
     assert not h.system.grow(a).night_lighting
     await h.system.set_night_lighting(True, a)
-    await h.system.start_grow("Leafy Greens", name="Layers 1+2", replace=a)
+    await h.start("Leafy Greens", name="Layers 1+2", replace=a)
     assert h.system.grow(a).night_lighting
 
 
 async def test_water_targets_are_where_the_grows_overlap(h: Harness) -> None:
     await start_two(h)
-    h.system.data["plans"]["leafy"].update(ph_min=5.8, ph_max=6.5)
-    h.system.data["plans"]["herbs"].update(ph_min=6.0, ph_max=7.0)
-    h.system.set_plan("leafy", h.system.data["plans"]["leafy"])
-    h.system.set_plan("herbs", h.system.data["plans"]["herbs"])
+    edit_plan(h, "Layers 1+2", ph_min=5.8, ph_max=6.5)
+    edit_plan(h, "Layers 3+4", ph_min=6.0, ph_max=7.0)
     assert h.system.range_for("ph") == (6.0, 6.5)
     assert not h.system.range_conflict("ph")
 
 
 async def test_disagreeing_targets_use_the_oldest_grow_and_say_so(h: Harness) -> None:
     await start_two(h)
-    h.system.data["plans"]["leafy"].update(ph_min=5.5, ph_max=5.9)
-    h.system.data["plans"]["herbs"].update(ph_min=6.5, ph_max=7.0)
-    h.system.set_plan("leafy", h.system.data["plans"]["leafy"])
-    h.system.set_plan("herbs", h.system.data["plans"]["herbs"])
+    edit_plan(h, "Layers 1+2", ph_min=5.5, ph_max=5.9)
+    edit_plan(h, "Layers 3+4", ph_min=6.5, ph_max=7.0)
     assert h.system.range_for("ph") == (5.5, 5.9)
     assert h.system.range_conflict("ph")
     assert snapshot(h.system)["metrics"]["ph"]["conflict"] is True
@@ -159,10 +166,8 @@ async def test_disagreeing_targets_use_the_oldest_grow_and_say_so(h: Harness) ->
 
 async def test_a_grow_without_a_range_does_not_loosen_the_other(h: Harness) -> None:
     await start_two(h)
-    h.system.data["plans"]["leafy"].update(ph_min=5.8, ph_max=6.5)
-    h.system.data["plans"]["herbs"].update(ph_min=None, ph_max=None)
-    h.system.set_plan("leafy", h.system.data["plans"]["leafy"])
-    h.system.set_plan("herbs", h.system.data["plans"]["herbs"])
+    edit_plan(h, "Layers 1+2", ph_min=5.8, ph_max=6.5)
+    edit_plan(h, "Layers 3+4", ph_min=None, ph_max=None)
     assert h.system.range_for("ph") == (5.8, 6.5)
 
 
@@ -218,16 +223,10 @@ async def test_events_say_which_grow(h: Harness) -> None:
     assert h.ha.fired(EVENT_GROW_ENDED)[-1]["grow_id"] == a
 
 
-async def test_deleting_a_plan_ends_only_the_grows_running_it(h: Harness) -> None:
-    await start_two(h)
-    h.system.delete_plan("herbs")
-    assert [g.name for g in h.system.grows] == ["Layers 1+2"]
-
-
 async def test_preview_shows_who_else_uses_a_device(h: Harness) -> None:
     two_zones(h)
-    await h.system.start_grow("Leafy Greens", name="Layers 1+2", stage_ref=3)
-    preview = h.system.preview_start(plan_ref="Herbs")
+    await h.start("Leafy Greens", name="Layers 1+2", stage_ref=3)
+    preview = h.preview("Herbs")
     pump = next(d for d in preview["devices"] if d["name"] == "Water pump")
     assert pump["shared_with"] == ["Layers 1+2"]
     center = next(d for d in preview["devices"] if d["name"] == "Center lights")
@@ -236,22 +235,22 @@ async def test_preview_shows_who_else_uses_a_device(h: Harness) -> None:
 
 async def test_reading_overdue_counts_from_the_earliest_grow(h: Harness) -> None:
     two_zones(h)
-    await h.system.start_grow("Leafy Greens", name="Old", stage_ref=3)
+    await h.start("Leafy Greens", name="Old", stage_ref=3)
     h.clock.advance(days=2)
-    await h.system.start_grow("Herbs", name="New")
+    await h.start("Herbs", name="New")
     h.clock.advance(days=1, hours=1)
     assert h.system.reading_overdue is True  # 3 days since "Old" began; "New" is a day old
 
 
 async def test_todo_text_names_the_grow_only_when_there_are_several(h: Harness) -> None:
     two_zones(h)
-    await h.system.start_grow("Leafy Greens", name="Layers 1+2", stage_ref=3)
+    await h.start("Leafy Greens", name="Layers 1+2", stage_ref=3)
     todo = FakeTodo()
     sync = TodoSync(h.system, todo)
     await sync.reconcile()
     assert not any(s.startswith("Layers 1+2:") for s in todo.open_summaries())
 
-    await h.system.start_grow("Herbs", name="Layers 3+4")
+    await h.start("Herbs", name="Layers 3+4")
     await h.system.add_custom_task("Buy filters")
     todo2 = FakeTodo()
     await TodoSync(h.system, todo2).reconcile()
@@ -264,9 +263,13 @@ async def test_todo_text_names_the_grow_only_when_there_are_several(h: Harness) 
 def test_a_single_grow_saved_by_an_older_version_is_migrated() -> None:
     h = Harness()
     data = h.system.data
+    data["plans"] = {
+        "leafy": h.plans["Leafy Greens"],
+        "unused": {**h.plans["Leafy Greens"], "name": "Spare"},
+    }
     legacy = {
         "plan_id": "leafy",
-        "stage_id": data["plans"]["leafy"]["stages"][1]["id"],
+        "stage_id": h.plans["Leafy Greens"]["stages"][1]["id"],
         "stage_started": TODAY.isoformat(),
         "grow_started": (TODAY - timedelta(days=7)).isoformat(),
         "stage_run": 2,
@@ -302,6 +305,9 @@ def test_a_single_grow_saved_by_an_older_version_is_migrated() -> None:
     assert items["i1"]["grow"] == "Leafy Greens"
     assert items["i2"]["grow"] is None
     assert not any(k in system.rt for k in ("plan_id", "stage_id", "night_lighting", "history"))
+    # The grow now holds its own plan; the plan nobody runs is left to become a template.
+    assert grow.data["plan"]["name"] == "Leafy Greens" and "plan_id" not in grow.data
+    assert list(system.take_unused_plans()) == ["unused"] and "plans" not in system.data
 
 
 def test_a_legacy_grow_whose_plan_is_gone_is_dropped() -> None:

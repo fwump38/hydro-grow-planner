@@ -1,5 +1,5 @@
 name: Hydro Grow Planner
-version: "0.5.1"
+version: "0.6.0"
 slug: hydro_grow_planner
 description: Plan hydroponic grows, run light and pump schedules, and track tasks and water readings.
 url: https://github.com/fwump38/hydro-grow-planner

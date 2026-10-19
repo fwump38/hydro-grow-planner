@@ -23,7 +23,7 @@ async def test_only_changes_are_sent(h: Harness) -> None:
     assert first
     assert outbox.update("sys1", *build(snapshot(h.system))) == []  # nothing changed
 
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     changed = outbox.update("sys1", *build(snapshot(h.system)))
     topics = {t for t, _, _ in changed}
     assert any(t.endswith("_stage/state") for t in topics)

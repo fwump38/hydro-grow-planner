@@ -10,9 +10,11 @@ interface Props {
   onSnap: (snap: Snapshot) => void;
   /** Open the wizard: to add a grow, or (with a grow id) to change that one. */
   onStart: (replace?: string) => void;
+  /** Open a grow's own plan for editing. */
+  onEditPlan: (grow: string) => void;
 }
 
-export function Overview({ snap, onSnap, onStart }: Props) {
+export function Overview({ snap, onSnap, onStart, onEditPlan }: Props) {
   const growing = snap.grows.filter((g) => g.stage);
   if (!snap.active || growing.length === 0) {
     return (
@@ -32,13 +34,13 @@ export function Overview({ snap, onSnap, onStart }: Props) {
   return (
     <>
       {growing.map((g) => (
-        <StageCard key={g.id} snap={snap} grow={g} stage={g.stage as StageView} onSnap={onSnap} onStart={onStart} />
+        <StageCard key={g.id} snap={snap} grow={g} stage={g.stage as StageView} onSnap={onSnap} onStart={onStart} onEditPlan={onEditPlan} />
       ))}
       <div class="row">
         <button class="btn" onClick={() => onStart()}>Add a grow…</button>
         <span class="muted small">
           {snap.system_day ? `System day ${snap.system_day}. ` : ""}
-          {growing.length > 1 ? "Grows share the reservoir, pump and room; each has its own lights, stage and tasks." : "Run another plan alongside, e.g. a second set of layers."}
+          {growing.length > 1 ? "Grows share the reservoir, pump and room; each has its own lights, stage and tasks." : "Run another grow alongside, e.g. on a second set of layers."}
         </span>
       </div>
       <div class="grid wide">
@@ -52,7 +54,7 @@ export function Overview({ snap, onSnap, onStart }: Props) {
 
 // -- stage ---------------------------------------------------------------------------------
 
-function StageCard({ snap, grow, stage, onSnap, onStart }: Props & { grow: GrowView; stage: StageView }) {
+function StageCard({ snap, grow, stage, onSnap, onStart, onEditPlan }: Props & { grow: GrowView; stage: StageView }) {
   const { run, busy } = useAction();
   const act = (a: "advance" | "previous" | "restart") => run(() => api.stageAction(snap.id, grow.id, a)).then((s) => s && onSnap(s));
   const next = grow.stages[stage.number];
@@ -69,6 +71,7 @@ function StageCard({ snap, grow, stage, onSnap, onStart }: Props & { grow: GrowV
           </p>
         </div>
         <div class="row">
+          <button class="btn" onClick={() => onEditPlan(grow.id)}>Edit plan…</button>
           <button class="btn" onClick={() => onStart(grow.id)}>Change…</button>
           <ConfirmButton
             label="End grow"

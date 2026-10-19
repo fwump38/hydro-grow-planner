@@ -41,7 +41,7 @@ broker itself.
    tick *Turn items I add to this list into tasks*.
 4. **Overview → Start a grow.** Pick a template, say which of your devices plays each role, then say
    **which stage you're at and when it started**, and review exactly what will happen.
-5. Running more than one plan on the same tower? See [Several grows at once](#several-grows-at-once).
+5. Running more than one grow on the same tower? See [Several grows at once](#several-grows-at-once).
 
 ## What you get
 
@@ -52,13 +52,14 @@ your tasks grouped as overdue / today / next 7 days.
 Nothing you type into the pH/EC box is saved until you press **Record**, so nudging the number up
 and down doesn't create a history of in-between readings.
 
-**Plan editor**: a single page with Save/Discard. Per device you pick a mode (not managed, off,
+**Editing a grow's plan**: **Overview → Edit plan…** on a grow opens a single page with Save/Discard. Each grow keeps its own copy of the template it started from, so changes affect only that grow.
+Per device Per device you pick a mode (not managed, off,
 always on, time window, cycle) and only that mode's fields appear, with a live 24-hour preview.
 Tasks are edited inline. Edits are validated, and errors show next to the field.
 
 **Templates**: browse the built-in templates (Bell Pepper, Leafy Greens, Lettuce, Pepper, Spinach,
 Tomato, from the Elfsys Grow Cloud app, plus *Mixed Herbs*) stage by stage, duplicate one to edit it,
-save any of your plans as a template, and import/export JSON.
+save a grow's plan as a template, and import/export JSON.
 
 Every built-in template has a pH, temperature and humidity range and an EC range for every stage, so
 the out-of-range alerts are useful from day one. *Leafy Greens* uses generic values that suit most
@@ -111,12 +112,15 @@ stay for you to clean up after the grow, but they stop repeating.
 
 ### Several grows at once
 
-A tower's layers can run different plans at the same time. **Overview → Add a grow…** starts another one;
+A tower's layers can run different grows at the same time. **Overview → Add a grow…** starts another one;
 give each a name such as *Layers 1+2*. Grows share the **reservoir, pump, sensors and room**, and each has
 its own plan, stage, start date, tasks and night-lighting switch.
 
-- **Lights:** a template role can drive several devices (tick them in the wizard), so a pair of layers on one
-  plug is one device. Give each grow its own lights; the wizard skips lights another grow already runs.
+- **Zones and roles:** in **Settings** give each device a role (center light, side light, pump) and put each
+  light in a **zone**, e.g. *Layers 1+2*. Starting a grow is then just a template and a zone: the zone's
+  lights and the shared pump are picked up automatically. A zone is greyed out only while a running grow
+  uses it, and frees up when that grow ends (you can still share one, with a warning). A new system opens a
+  short setup (name, zones, devices); a system without zones asks you to set them up before starting a grow.
 - **Shared devices** (normally the pump): when two grows both schedule a device, it is **on whenever either
   wants it on**. Overview shows who schedules each device.
 - **pH, EC, temperature and humidity targets** are where the grows' ranges overlap. If they don't overlap
@@ -157,7 +161,7 @@ Created over MQTT discovery, one device per grow system. Entity IDs follow the s
 | Sensors | tasks due, next task, system day, next maintenance, measured pH / EC (with long-term statistics), pH and EC min/max |
 | Binary sensors | each device's scheduled state, pH / EC / temperature / humidity out of range, water reading overdue |
 | Controls | schedule control switch, sync devices, water checked |
-| Per grow | plan, stage, stage day, days remaining, progress, grow day, grow started and expected end sensors; plan and stage selects; a night lighting switch; next / previous / restart stage buttons. Named after the grow, e.g. `sensor.grow_system_layers_1_2_stage_day` |
+| Per grow | plan, stage, stage day, days remaining, progress, grow day, grow started and expected end sensors; a stage select; a night lighting switch; next / previous / restart stage buttons. Named after the grow, e.g. `sensor.grow_system_layers_1_2_stage_day` |
 | Numbers | Record pH / Record EC, only when there's no sensor (commit on Enter) |
 
 They go *unavailable* if the app stops. EC entities use your chosen unit.

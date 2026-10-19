@@ -19,6 +19,9 @@ export interface DeviceView {
   name: string;
   entity_id: string;
   light: boolean;
+  /** Which template role it plays ("center_lights", "side_lights", "water_pump") or "" for none. */
+  role: string;
+  zone: string | null;
   state: boolean | null;
   desired: boolean | null;
   override: boolean;
@@ -96,6 +99,14 @@ export interface MaintenanceView extends MaintenanceTask {
   next_due: string | null;
 }
 
+/** A group of lights that one grow takes over, e.g. "Layers 1+2". */
+export interface ZoneView {
+  id: string;
+  name: string;
+  /** Names of the running grows that drive this zone's lights. */
+  busy_by: string[];
+}
+
 export interface Snapshot {
   id: string;
   name: string;
@@ -105,9 +116,9 @@ export interface Snapshot {
   system_day: number | null;
   system_started: string | null;
   maintenance: MaintenanceView[];
-  plans: { id: string; name: string }[];
   schedule_enabled: boolean;
   devices: DeviceView[];
+  zones: ZoneView[];
   metrics: Record<Metric, MetricView>;
   ec_unit: string;
   last_reading: string | null;
@@ -128,11 +139,19 @@ export interface DeviceConfig {
   name: string;
   entity_id: string;
   light: boolean;
+  role: string;
+  zone: string | null;
+}
+
+export interface ZoneConfig {
+  id: string;
+  name: string;
 }
 
 export interface SystemConfig {
   name: string;
   devices: DeviceConfig[];
+  zones: ZoneConfig[];
   sensors: Record<Metric, string | null>;
   ec_unit: string;
   ec_sensor_unit: string | null;

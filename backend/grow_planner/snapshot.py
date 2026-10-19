@@ -100,6 +100,8 @@ def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
             "name": device.name,
             "entity_id": device.entity_id,
             "light": device.light,
+            "role": device.role,
+            "zone": device.zone,
             "state": actual,
             "desired": want,
             "override": want is not None and actual is not None and want != actual,
@@ -156,9 +158,19 @@ def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
         "system_day": system.system_day,
         "system_started": system.system_started.isoformat() if system.system_started else None,
         "maintenance": system.maintenance_view(),
-        "plans": [{"id": p.id, "name": p.name} for p in system.plans.values()],
         "schedule_enabled": system.schedule_enabled,
         "devices": devices,
+        "zones": [
+            {
+                "id": z["id"],
+                "name": z["name"],
+                # Growers whose schedules run this zone's lights right now.
+                "busy_by": sorted(
+                    {x["grow"] for d in devices if d["zone"] == z["id"] for x in d["drivers"]}
+                ),
+            }
+            for z in system.data["zones"]
+        ],
         "metrics": metrics,
         "ec_unit": ec_unit,
         "ec_range": [ec_low, ec_high],

@@ -9,6 +9,7 @@ import logging
 from typing import Any, Protocol
 
 from .core.models import new_id
+from .core.presets import plan_to_template
 from .engine import GrowError, GrowSystem, new_system_data
 from .mqtt_entities import build, handle_command
 from .ports import Clock, EntityState, HAPort, ReadingsPort
@@ -77,6 +78,15 @@ class App:
         for data in self.store.systems.values():
             self._adopt(data)
 
+    def _plans_to_templates(self, system: GrowSystem) -> None:
+        """Turn plans saved by older versions that no grow runs into custom templates."""
+        roles = {d["id"]: d["role"] for d in system.data["devices"] if d.get("role")}
+        plans = system.take_unused_plans()
+        for plan in plans.values():
+            self.store.templates[new_id()] = plan_to_template(plan, roles)
+        if plans:
+            self.store.save()
+
     def _adopt(self, data: dict[str, Any]) -> GrowSystem:
         system = GrowSystem(
             data,
@@ -89,6 +99,7 @@ class App:
         # Every system reads the one table of entity states, so a device or sensor
         # added later already has a state.
         system.states = self.all_states
+        self._plans_to_templates(system)
         self.systems[system.id] = system
         self._wake[system.id] = asyncio.Event()
         return system

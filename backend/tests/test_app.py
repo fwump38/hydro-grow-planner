@@ -60,14 +60,19 @@ def app(tmp_path: Path) -> App:
 def configure(app: App, name: str = "Tower"):
     system = app.create_system(name)
     system.update_config(
-        devices=[{"entity_id": "switch.pump", "name": "Pump", "light": False}],
+        devices=[
+            {"entity_id": "switch.pump", "name": "Pump", "light": False, "role": "water_pump"}
+        ],
         todo_entity="todo.grow",
     )
-    system.data["plans"]["p"] = build_from_preset(
+    return system
+
+
+def leafy_plan(system) -> dict:
+    """Plan data for a leafy greens grow driving this system's pump."""
+    return build_from_preset(
         "leafy_greens", {"water_pump": system.data["devices"][0]["id"]}, new_id
     )
-    system._plans_cache = None
-    return system
 
 
 async def test_create_validates_names(app: App) -> None:
@@ -87,7 +92,7 @@ async def test_changes_publish_to_mqtt_and_the_panel_once(app: App) -> None:
         queue.get_nowait()
 
     app.on_ha_state("switch.pump", EntityState("off"))
-    await system.start_grow("Leafy Greens")
+    await system.start_grow(leafy_plan(system))
     await system.record_reading(ph=6.1)
     await app.settle()
     assert len(app.mqtt.published) == 1  # a burst of changes is one publish
@@ -97,7 +102,7 @@ async def test_changes_publish_to_mqtt_and_the_panel_once(app: App) -> None:
 async def test_tasks_are_mirrored_to_the_todo_list(app: App) -> None:
     system = configure(app)
     app.on_ha_state("switch.pump", EntityState("off"))
-    await system.start_grow("Leafy Greens", stage_ref=3)
+    await system.start_grow(leafy_plan(system), stage_ref=3)
     await app.settle()
     todo = app.ha.todo("todo.grow")
     assert "Move the grow lights" in todo.open_summaries()
@@ -107,7 +112,7 @@ async def test_state_changes_reach_systems_and_fire_alerts(app: App) -> None:
     system = configure(app)
     system.update_config(sensors={"ph": "sensor.ph"})
     app.on_ha_state("switch.pump", EntityState("off"))
-    await system.start_grow("Leafy Greens")
+    await system.start_grow(leafy_plan(system))
     app.on_ha_state("sensor.ph", EntityState("7.5"))
     await asyncio.sleep(0)
     assert system.ph == 7.5
@@ -131,7 +136,7 @@ async def test_mqtt_command_errors_are_contained(app: App) -> None:
 async def test_reconnect_resyncs_and_subscribes_to_todo(app: App) -> None:
     system = configure(app)
     app.on_ha_state("switch.pump", EntityState("off"))
-    await system.start_grow("Leafy Greens", stage_ref=3)  # 12:00 is inside a pump run: on
+    await system.start_grow(leafy_plan(system), stage_ref=3)  # 12:00 is inside a pump run: on
     app.on_ha_state("switch.pump", EntityState("off"))  # something turned it off meanwhile
     app.ha.calls.clear()
     await app.on_ha_connected()
@@ -142,7 +147,7 @@ async def test_reconnect_resyncs_and_subscribes_to_todo(app: App) -> None:
 async def test_state_survives_a_restart(app: App, tmp_path: Path) -> None:
     system = configure(app)
     app.on_ha_state("switch.pump", EntityState("off"))
-    await system.start_grow("Leafy Greens", stage_ref=2)
+    await system.start_grow(leafy_plan(system), stage_ref=2)
     await system.add_custom_task("Buy filters", every=14)
     await app.stop()
 
@@ -167,7 +172,7 @@ async def test_delete_system_removes_entities(app: App) -> None:
 async def test_loops_tick_and_stop(app: App) -> None:
     system = configure(app)
     app.on_ha_state("switch.pump", EntityState("off"))
-    await system.start_grow("Leafy Greens", stage_ref=3)
+    await system.start_grow(leafy_plan(system), stage_ref=3)
     app.start()
     await asyncio.sleep(0.05)
     await app.stop()
@@ -204,7 +209,6 @@ async def test_devices_added_later_already_know_their_state(app: App) -> None:
     )
     assert system.actual(system.devices[0]) is True
     assert system.data["sensors"]["temperature"] == "sensor.late_temp"
-    system._plans_cache = None
     assert system.states["sensor.late_temp"].state == "20"
 
 
@@ -224,3 +228,19 @@ async def test_repeated_identical_states_do_not_notify_anyone(app: App) -> None:
     app.on_ha_state("sensor.room_temp", EntityState("22", "°C", "Room"))  # a real change
     await app.settle()
     assert len(app.mqtt.published) == 1 and not queue.empty()
+
+
+def test_old_plans_nobody_runs_become_templates(app: App) -> None:
+    from grow_planner.engine import new_system_data
+
+    data = new_system_data("old1", "Old tower")
+    pump = {"id": "d1", "name": "Pump", "entity_id": "switch.pump", "light": False}
+    data["devices"] = [pump]
+    data["plans"] = {
+        "p": build_from_preset("leafy_greens", {"water_pump": "d1"}, new_id) | {"name": "Mine"}
+    }
+    system = app._adopt(data)
+    assert "plans" not in system.data
+    [template] = app.store.templates.values()
+    assert template["name"] == "Mine"
+    assert set(template["stages"][2]["schedules"]) == {"water_pump"}  # the pump's role was guessed

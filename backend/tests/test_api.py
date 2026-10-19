@@ -28,6 +28,12 @@ async def api(app, aiohttp_client):  # noqa: F811
     return client
 
 
+def leafy_body(api) -> dict:
+    """Start/preview arguments for a leafy greens grow driving the system's pump."""
+    device = api.system.data["devices"][0]["id"]
+    return {"template": "builtin:leafy_greens", "role_map": {"water_pump": device}}
+
+
 async def post(api, path: str, body: dict | None = None, status: int = 200) -> dict:
     response = await api.post(path, json=body)
     assert response.status == status, await response.text()
@@ -70,8 +76,8 @@ async def test_config_patch_and_validation(api) -> None:
 
 
 async def test_start_wizard_flow_mid_cycle(api) -> None:
-    plan_id = next(iter(api.system.data["plans"]))
-    body = {"plan": plan_id, "stage": "Vegetative", "stage_started": "2026-09-10"}
+    leafy = leafy_body(api)
+    body = {**leafy, "stage": "Vegetative", "stage_started": "2026-09-10"}
     preview = await post(api, f"{api.base}/grows/preview", body)
     assert preview["stage_day"] == 11 and preview["grow_started"] == "2026-08-27"
     assert (await (await api.get(api.base)).json())["active"] is False  # preview changes nothing
@@ -90,8 +96,8 @@ async def test_start_wizard_flow_mid_cycle(api) -> None:
 
 
 async def test_stage_actions(api) -> None:
-    plan_id = next(iter(api.system.data["plans"]))
-    started = await post(api, f"{api.base}/grows", {"plan": plan_id})
+    leafy = leafy_body(api)
+    started = await post(api, f"{api.base}/grows", leafy)
     base = f"{api.base}/grows/{started['grows'][0]['id']}"
 
     async def stage(path: str, body: dict | None = None) -> dict:
@@ -107,8 +113,8 @@ async def test_stage_actions(api) -> None:
 
 
 async def test_record_reading_and_history(api) -> None:
-    plan_id = next(iter(api.system.data["plans"]))
-    await post(api, f"{api.base}/grows", {"plan": plan_id, "stage": 3})
+    leafy = leafy_body(api)
+    await post(api, f"{api.base}/grows", {**leafy, "stage": 3})
     await api.patch(f"{api.base}/config", json={"ec_unit": "ppm 500"})
     snap = await post(api, f"{api.base}/readings", {"ph": "6.1", "ec": 800})
     assert snap["metrics"]["ph"]["value"] == 6.1
@@ -145,45 +151,44 @@ async def test_device_switch_and_toggles(api) -> None:
     ]
 
 
-async def test_plan_editing_with_field_errors(api) -> None:
-    plans = await (await api.get(f"{api.base}/plans")).json()
-    plan_id, plan = next(iter(plans.items()))
+async def test_a_grows_plan_can_be_edited_with_field_errors(api) -> None:
+    started = await post(api, f"{api.base}/grows", leafy_body(api))
+    gid = started["grows"][0]["id"]
+    plan = await (await api.get(f"{api.base}/grows/{gid}/plan")).json()
     plan["name"] = "Renamed"
     plan["stages"][0]["days"] = 9
-    resp = await api.put(f"{api.base}/plans/{plan_id}", json=plan)
+    resp = await api.put(f"{api.base}/grows/{gid}/plan", json=plan)
     assert resp.status == 200 and (await resp.json())["plan"]["stages"][0]["days"] == 9
 
     plan["stages"][0]["days"] = 0
     plan["ph_min"], plan["ph_max"] = 7, 6
-    resp = await api.put(f"{api.base}/plans/{plan_id}", json=plan)
+    resp = await api.put(f"{api.base}/grows/{gid}/plan", json=plan)
     assert resp.status == 422
     paths = {e["path"] for e in (await resp.json())["errors"]}
     assert {"stages[0].days", "ph_min"} <= paths
-    stored = (await (await api.get(f"{api.base}/plans")).json())[plan_id]
+    stored = await (await api.get(f"{api.base}/grows/{gid}/plan")).json()
     assert stored["stages"][0]["days"] == 9  # rejected edits change nothing
 
-    assert (await api.put(f"{api.base}/plans/missing", json=plan)).status == 404
+    assert (await api.put(f"{api.base}/grows/missing/plan", json=plan)).status == 400
 
 
-async def test_plan_from_template_with_role_mapping(api) -> None:
+async def test_a_grow_gets_its_plan_from_a_template_with_role_mapping(api) -> None:
     device = api.system.data["devices"][0]["id"]
-    made = await post(
+    started = await post(
         api,
-        f"{api.base}/plans",
+        f"{api.base}/grows",
         {"template": "builtin:lettuce", "role_map": {"water_pump": device}, "name": "My lettuce"},
     )
-    plan = made["plan"]
-    assert plan["name"] == "My lettuce" and plan["humidity_min"] == 50
-    assert set(plan["stages"][0]["schedules"]) == {device}
+    gid = started["grows"][0]["id"]
+    assert started["grows"][0]["name"] == "My lettuce"
+    plan = await (await api.get(f"{api.base}/grows/{gid}/plan")).json()
+    assert plan["humidity_min"] == 50 and set(plan["stages"][0]["schedules"]) == {device}
     bad = await api.post(
-        f"{api.base}/plans",
+        f"{api.base}/grows",
         json={"template": "builtin:lettuce", "role_map": {"water_pump": "nope"}},
     )
     assert bad.status == 400
-    blank = await post(api, f"{api.base}/plans", {"name": "Blank"})
-    assert len(blank["plan"]["stages"]) == 1
-    snap = await (await api.delete(f"{api.base}/plans/{made['plan_id']}")).json()
-    assert made["plan_id"] not in api.system.data["plans"] and snap["id"] == api.system.id
+    assert (await api.post(f"{api.base}/grows", json={})).status == 400  # needs a template
 
 
 async def test_templates_browse_duplicate_edit_delete(api) -> None:
@@ -221,19 +226,21 @@ async def test_template_import_and_export_round_trip(api) -> None:
     assert broken.status == 422
 
 
-async def test_save_plan_as_template(api) -> None:
-    plan_id = next(iter(api.system.data["plans"]))
+async def test_save_a_grow_as_template(api) -> None:
     device = api.system.data["devices"][0]["id"]
-    spec = {"system_id": api.system.id, "plan_id": plan_id, "device_roles": {device: "water_pump"}}
-    made = await post(api, "/api/templates", {"from_plan": spec, "name": "Mine"})
+    started = await post(api, f"{api.base}/grows", leafy_body(api))
+    spec = {"system_id": api.system.id, "grow_id": started["grows"][0]["id"]}
+    made = await post(api, "/api/templates", {"from_grow": spec, "name": "Mine"})
     assert made["name"] == "Mine" and set(made["stages"][2]["schedules"]) == {"water_pump"}
-    # And it can be used for a new plan again.
+    # And it can start a grow again.
     again = await post(
         api,
-        f"{api.base}/plans",
-        {"template": made["id"], "role_map": {"water_pump": device}},
+        f"{api.base}/grows",
+        {"template": made["id"], "role_map": {"water_pump": device}, "name": "Again"},
     )
-    assert set(again["plan"]["stages"][0]["schedules"]) == {device}
+    gid = next(g["id"] for g in again["grows"] if g["name"] == "Again")
+    plan = await (await api.get(f"{api.base}/grows/{gid}/plan")).json()
+    assert set(plan["stages"][0]["schedules"]) == {device}
 
 
 async def test_event_test_button_fires_a_marked_sample(api) -> None:
@@ -272,7 +279,6 @@ async def test_serves_the_built_panel(app, aiohttp_client, tmp_path: Path) -> No
 
 async def test_preview_a_template_before_any_plan_exists(api) -> None:
     device = api.system.data["devices"][0]["id"]
-    before = dict(api.system.data["plans"])
     preview = await post(
         api,
         f"{api.base}/grows/preview",
@@ -284,18 +290,16 @@ async def test_preview_a_template_before_any_plan_exists(api) -> None:
         },
     )
     assert preview["stage"] == "Vegetative" and preview["stage_day"] == 11
-    assert api.system.data["plans"] == before  # nothing was created
+    assert api.system.grows == []  # nothing was started
     assert (
         await api.post(f"{api.base}/grows/preview", json={"template": "builtin:nope"})
     ).status == 400
 
 
 async def test_two_grows_through_the_api(api) -> None:
-    plan_id = next(iter(api.system.data["plans"]))
-    first = await post(api, f"{api.base}/grows", {"plan": plan_id, "name": "Layers 1+2"})
-    second = await post(
-        api, f"{api.base}/grows", {"plan": plan_id, "name": "Layers 3+4", "stage": 3}
-    )
+    leafy = leafy_body(api)
+    first = await post(api, f"{api.base}/grows", {**leafy, "name": "Layers 1+2"})
+    second = await post(api, f"{api.base}/grows", {**leafy, "name": "Layers 3+4", "stage": 3})
     assert [g["name"] for g in second["grows"]] == ["Layers 1+2", "Layers 3+4"]
     one, two = (g["id"] for g in second["grows"])
     assert one == first["grows"][0]["id"]
@@ -316,9 +320,7 @@ async def test_two_grows_through_the_api(api) -> None:
     assert next(t for t in tagged["tasks"] if t["title"] == "Harvest")["grow"] == "Layers 1+2"
 
     # Replacing a grow keeps its place; ending one leaves the other.
-    replaced = await post(
-        api, f"{api.base}/grows", {"plan": plan_id, "name": "Salad", "replace": one}
-    )
+    replaced = await post(api, f"{api.base}/grows", {**leafy, "name": "Salad", "replace": one})
     assert [g["name"] for g in replaced["grows"]] == ["Salad", "Herbs"]
     ended = await (await api.delete(f"{api.base}/grows/{one}")).json()
     assert [g["name"] for g in ended["grows"]] == ["Herbs"] and ended["active"]
@@ -327,10 +329,73 @@ async def test_two_grows_through_the_api(api) -> None:
 
 async def test_a_template_role_can_map_to_several_devices(api) -> None:
     devices = [d["id"] for d in api.system.data["devices"]]
-    made = await post(
+    started = await post(
         api,
-        f"{api.base}/plans",
+        f"{api.base}/grows",
         {"template": "builtin:leafy_greens", "role_map": {"side_lights": devices[:2]}},
     )
-    schedules = made["plan"]["stages"][0]["schedules"]
+    plan = await (await api.get(f"{api.base}/grows/{started['grows'][0]['id']}/plan")).json()
+    schedules = plan["stages"][0]["schedules"]
     assert set(schedules) == set(devices[:2])
+
+
+async def test_zones_choose_lights_and_share_the_pump(api) -> None:
+    zones = [{"name": "Layers 1+2"}, {"name": "Layers 3+4"}]
+    devices = [
+        {"name": "Center 1+2", "entity_id": "switch.c12", "role": "center_lights", "zone": "z1"},
+        {"name": "Side 1+2", "entity_id": "switch.s12", "role": "side_lights", "zone": "z1"},
+        {"name": "Center 3+4", "entity_id": "switch.c34", "role": "center_lights", "zone": "z2"},
+        {"name": "Pump", "entity_id": "switch.pump", "role": "water_pump"},
+    ]
+    # Zone ids are generated, so save the zones first, then point the lights at them.
+    saved = await (await api.patch(f"{api.base}/config", json={"zones": zones})).json()
+    z1, z2 = (z["id"] for z in saved["zones"])
+    for d in devices:
+        if d.get("zone"):
+            d["zone"] = z1 if d["zone"] == "z1" else z2
+    snap = await (await api.patch(f"{api.base}/config", json={"devices": devices})).json()
+    by_name = {d["name"]: d for d in snap["devices"]}
+    assert by_name["Center 3+4"]["zone"] == z2 and by_name["Pump"]["zone"] is None
+
+    bad = await api.post(f"{api.base}/grows", json={"template": "builtin:lettuce", "zones": ["x"]})
+    assert bad.status == 400
+
+    # A zone is busy only while a running grow drives its lights.
+    snap = await post(
+        api, f"{api.base}/grows", {"template": "builtin:lettuce", "zones": [z1], "name": "A"}
+    )
+    plan = await (await api.get(f"{api.base}/grows/{snap['grows'][0]['id']}/plan")).json()
+    used = set(plan["stages"][0]["schedules"])
+    assert used == {by_name[n]["id"] for n in ("Center 1+2", "Side 1+2", "Pump")}
+    snap = await (await api.get(api.base)).json()
+    busy = {z["name"]: z["busy_by"] for z in snap["zones"]}
+    assert busy == {"Layers 1+2": ["A"], "Layers 3+4": []}
+    await api.delete(f"{api.base}/grows/{snap['grows'][0]['id']}")
+    snap = await (await api.get(api.base)).json()
+    assert all(z["busy_by"] == [] for z in snap["zones"])
+
+
+async def test_zone_and_role_validation(api) -> None:
+    dup = await api.patch(f"{api.base}/config", json={"zones": [{"name": "A"}, {"name": "a"}]})
+    assert dup.status == 400
+    role = await api.patch(
+        f"{api.base}/config",
+        json={"devices": [{"name": "x", "entity_id": "switch.x", "role": "nope"}]},
+    )
+    assert role.status == 400
+    # Removing a zone unzones its lights.
+    saved = await (await api.patch(f"{api.base}/config", json={"zones": [{"name": "A"}]})).json()
+    zid = saved["zones"][0]["id"]
+    light = {"name": "c", "entity_id": "switch.c", "role": "center_lights", "zone": zid}
+    await api.patch(f"{api.base}/config", json={"devices": [light]})
+    snap = await (await api.patch(f"{api.base}/config", json={"zones": []})).json()
+    assert snap["devices"][0]["zone"] is None
+
+
+def test_legacy_devices_get_a_guessed_role() -> None:
+    from grow_planner.core.presets import guess_role
+
+    assert guess_role("switch.x", "Center lights") == "center_lights"
+    assert guess_role("switch.x", "Side light") == "side_lights"
+    assert guess_role("switch.water_pump", "Pump") == "water_pump"
+    assert guess_role("switch.x", "Fan") == ""

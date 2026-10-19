@@ -6,7 +6,6 @@ from typing import Final
 
 APP_SLUG: Final = "hydro_grow_planner"
 
-NO_PLAN: Final = "none"
 
 DEFAULT_READING_INTERVAL_DAYS: Final = 3
 DEFAULT_REMINDER_TIME: Final = "08:00:00"

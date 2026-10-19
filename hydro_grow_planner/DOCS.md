@@ -13,7 +13,7 @@ broker through the Supervisor; there is nothing to configure here.
 |---|---|
 | `log_level` | `debug`, `info`, `warning` or `error`. |
 
-Grow systems, devices, sensors, plans and templates are managed in the panel and stored in the app's
+Grow systems, devices, zones, sensors, grows and templates are managed in the panel and stored in the app's
 data folder (included in Home Assistant backups).
 
 ## Notifications

@@ -34,7 +34,7 @@ async def test_idle_system_publishes_only_the_shared_entities(h: Harness) -> Non
 
 
 async def test_entity_ids_follow_the_system_and_grow_names(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", name="Layers 1+2")
+    await h.start("Leafy Greens", name="Layers 1+2")
     configs, _ = build(snapshot(h.system))
     assert (
         by_key(configs, "sensor", "stage_day")["default_entity_id"]
@@ -44,15 +44,13 @@ async def test_entity_ids_follow_the_system_and_grow_names(h: Harness) -> None:
         by_key(configs, "switch", "night_lighting")["default_entity_id"]
         == "switch.tower_layers_1_2_night_lighting"
     )
-    assert by_key(configs, "select", "active_plan")["options"] == ["none", "Leafy Greens"]
+    assert not any(t.endswith("_active_plan/config") for t in configs)
     ids = [c["unique_id"] for c in configs.values()]
     assert len(ids) == len(set(ids))
 
 
 async def test_running_grow_state(h: Harness) -> None:
-    await h.system.start_grow(
-        "Leafy Greens", stage_ref=3, stage_started=h.system.today - timedelta(days=4)
-    )
+    await h.start("Leafy Greens", stage_ref=3, stage_started=h.system.today - timedelta(days=4))
     configs, states = build(snapshot(h.system))
     value = lambda platform, key: states[by_key(configs, platform, key)["state_topic"]]  # noqa: E731
     assert value("sensor", "stage") == "Vegetative"
@@ -68,8 +66,8 @@ async def test_running_grow_state(h: Harness) -> None:
 
 
 async def test_each_grow_gets_its_own_entities(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", name="Layers 1+2", stage_ref=1)
-    await h.system.start_grow("Leafy Greens", name="Layers 3+4", stage_ref=3)
+    await h.start("Leafy Greens", name="Layers 1+2", stage_ref=1)
+    await h.start("Leafy Greens", name="Layers 3+4", stage_ref=3)
     configs, states = build(snapshot(h.system))
     stages = {
         c["name"]: states[c["state_topic"]]
@@ -86,7 +84,7 @@ async def test_each_grow_gets_its_own_entities(h: Harness) -> None:
 
 async def test_ec_entities_use_the_display_unit(h: Harness) -> None:
     h.system.data["ec_unit"] = "ppm 500"
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    await h.start("Leafy Greens", stage_ref=3)
     await h.system.record_reading(ec=700)
     configs, states = build(snapshot(h.system))
     sensor = by_key(configs, "sensor", "measured_ec")
@@ -112,7 +110,7 @@ async def test_no_record_number_when_a_sensor_provides_the_value(h: Harness) -> 
 
 async def test_commands(h: Harness) -> None:
     s = h.system
-    await s.start_grow("Leafy Greens", name="Layers 1+2")
+    await h.start("Leafy Greens", name="Layers 1+2")
     key = f"grow_{s.grow().id}_"
     await handle_command(s, key + "next_stage", "PRESS")
     assert s.grow().stage.name == "Seedling"
@@ -122,14 +120,14 @@ async def test_commands(h: Harness) -> None:
     assert s.grow().stage.name == "Seedling"
     await handle_command(s, key + "night_lighting", "ON")
     assert s.grow().night_lighting
-    await handle_command(s, key + "active_plan", "Leafy Greens")  # restarts the same grow
-    assert s.grow().stage.name == "Sprouting" and s.grow().name == "Layers 1+2"
+    await handle_command(s, key + "restart_stage", "PRESS")
+    assert s.grow().stage.name == "Seedling" and s.grow().name == "Layers 1+2"
     await handle_command(s, "schedule_control", "OFF")
     assert not s.schedule_enabled
     await handle_command(s, "record_ph", "6.3")
     assert s.ph == 6.3
     await handle_command(s, "water_checked", "PRESS")
-    await handle_command(s, key + "active_plan", "none")
-    assert not s.is_active
+    with pytest.raises(GrowError):
+        await handle_command(s, key + "active_plan", "none")  # plans are no longer switched here
     with pytest.raises(GrowError):
         await handle_command(s, "bogus", "")

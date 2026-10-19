@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from .core import units
-from .core.const import APP_SLUG, NO_PLAN
+from .core.const import APP_SLUG
 from .engine import GrowError, GrowSystem
 
 DISCOVERY_PREFIX = "homeassistant"
@@ -123,7 +123,6 @@ def build(snap: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, st
     )
 
     # -- each running grow ---------------------------------------------------------------------
-    plan_names = [p["name"] for p in snap["plans"]]
     for grow in snap["grows"]:
         gadd = _grow_adder(add, grow)
         stage = grow["stage"]
@@ -163,15 +162,6 @@ def build(snap: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, st
         gadd("sensor", "grow_day", "Grow day", grow["grow_day"], icon="mdi:calendar-range")
         gadd("sensor", "grow_started", "Grow started", grow["grow_started"], device_class="date")
         gadd("sensor", "expected_end", "Expected end", grow["expected_end"], device_class="date")
-        gadd(
-            "select",
-            "active_plan",
-            "Plan",
-            grow["plan"]["name"] if grow["plan"] else NO_PLAN,
-            True,
-            options=[NO_PLAN, *plan_names],
-            icon="mdi:sprout",
-        )
         stage_options = [f"{i}. {s['name']}" for i, s in enumerate(grow["stages"], 1)]
         gadd(
             "select",
@@ -286,13 +276,6 @@ async def handle_command(system: GrowSystem, key: str, payload: str) -> None:
             await system.previous_stage(grow)
         elif key == "restart_stage":
             await system.restart_stage(grow)
-        elif key == "active_plan":
-            if payload == NO_PLAN:
-                await system.end_grow(grow)
-            else:
-                await system.start_grow(
-                    payload, replace=grow, name=system.grow(grow).name, keep_start=True
-                )
         elif key == "current_stage":
             number = payload.split(".", 1)[0]
             await system.set_stage(int(number) if number.isdigit() else payload, grow=grow)

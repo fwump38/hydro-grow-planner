@@ -12,6 +12,7 @@ Stages never change on their own. The engine only prompts (the
 from __future__ import annotations
 
 from collections.abc import Callable
+import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
@@ -36,6 +37,7 @@ from .core.const import (
 )
 from .core.maintenance import default_maintenance, normalize_maintenance, task_id as maint_task_id
 from .core.models import DeviceSchedule, Plan, Stage, Task, new_id, out_of_range
+from .core.presets import LIGHT_ROLES, PRESET_ROLES, guess_role
 from .core.progress import (
     day_number,
     expected_end,
@@ -56,6 +58,7 @@ METRICS = ("ph", "ec", "temperature", "humidity")
 CONFIG_KEYS = {
     "name",
     "devices",
+    "zones",
     "sensors",
     "ec_unit",
     "ec_sensor_unit",
@@ -90,6 +93,8 @@ class Device:
     name: str
     entity_id: str
     light: bool = False
+    role: str = ""
+    zone: str | None = None
 
 
 class Grow:
@@ -116,8 +121,8 @@ class Grow:
 
     @property
     def plan(self) -> Plan | None:
-        """Return the plan being run."""
-        return self.system.plans.get(self.data.get("plan_id") or "")
+        """Return the grow's own copy of its plan (schedules, tasks, targets)."""
+        return self.system.plan_of(self)
 
     @property
     def name(self) -> str:
@@ -209,6 +214,7 @@ def new_system_data(system_id: str, name: str) -> dict[str, Any]:
         "id": system_id,
         "name": name,
         "devices": [],
+        "zones": [],
         "sensors": {metric: None for metric in METRICS},
         "ec_unit": DEFAULT_EC_UNIT,
         "ec_sensor_unit": None,
@@ -217,7 +223,6 @@ def new_system_data(system_id: str, name: str) -> dict[str, Any]:
         "todo_entity": None,
         "todo_adopt": False,
         "maintenance": default_maintenance(),
-        "plans": {},
         "runtime": {},
     }
 
@@ -244,10 +249,14 @@ class GrowSystem:
         self._on_change = on_change
         self._make_id = make_id
         self.states: dict[str, EntityState] = {}
-        self._plans_cache: dict[str, Plan] | None = None
+        self._plans_cache: dict[str, tuple[dict[str, Any], Plan]] = {}
 
         data.setdefault("maintenance", default_maintenance())
         data.setdefault("todo_adopt", False)
+        data.setdefault("zones", [])
+        for device in data.get("devices", []):
+            device.setdefault("role", guess_role(device["entity_id"], device["name"]))
+            device.setdefault("zone", None)
         rt = data.setdefault("runtime", {})
         rt.setdefault("maintenance", {})
         rt.setdefault("schedule_enabled", True)
@@ -260,6 +269,36 @@ class GrowSystem:
         rt.setdefault("alerts", {})
         self._alerts = {m: RangeAlert(rt["alerts"].setdefault(m, {})) for m in METRICS}
         self._migrate_single_grow()
+        self._absorb_plans()
+
+    def _absorb_plans(self) -> None:
+        """Move the saved plans older versions kept into the grows running them.
+
+        Each grow gets its own copy. Plans no grow uses stay in `data["plans"]` for the app
+        to turn into templates (see `take_unused_plans`).
+        """
+        saved = self.data.get("plans") or {}
+        used: set[str] = set()
+        for record in list(self.rt["grows"].values()):
+            plan_id = record.pop("plan_id", None)
+            if "plan" in record:
+                continue
+            if plan_id not in saved:
+                # Its plan is gone, so there is nothing to run.
+                self.rt["grows"].pop(record["id"], None)
+                self.rt["instances"] = [
+                    i
+                    for i in self.rt["instances"]
+                    if i.get("grow") != record["id"] or i.get("custom")
+                ]
+                continue
+            record["plan"] = copy.deepcopy(saved[plan_id])
+            used.add(plan_id)
+        self.data["plans"] = {pid: plan for pid, plan in saved.items() if pid not in used}
+
+    def take_unused_plans(self) -> dict[str, dict[str, Any]]:
+        """Hand over (and forget) old saved plans no grow uses, so they can become templates."""
+        return self.data.pop("plans", None) or {}
 
     def _migrate_single_grow(self) -> None:
         """Move the one grow older versions kept in the runtime into a grow record."""
@@ -269,7 +308,8 @@ class GrowSystem:
         night = bool(rt.pop("night_lighting", False))
         history = rt.pop("history", [])
         legacy = {key: rt.pop(key) for key in LEGACY_GROW_KEYS if key in rt}
-        plan = self.plans.get(legacy.get("plan_id") or "")
+        saved = (self.data.get("plans") or {}).get(legacy.get("plan_id") or "")
+        plan = Plan.from_dict(legacy.get("plan_id") or "", saved) if saved else None
         if plan is None or plan.stage_index(legacy.get("stage_id")) is None:
             rt["instances"] = [i for i in rt["instances"] if i.get("custom")]
             return
@@ -341,44 +381,40 @@ class GrowSystem:
                 d["name"],
                 d["entity_id"],
                 d.get("light", guess_is_light(d["entity_id"], d["name"])),
+                d.get("role", ""),
+                d.get("zone"),
             )
             for d in self.data["devices"]
         ]
 
-    @property
-    def plans(self) -> dict[str, Plan]:
-        """Return the plans of this system by id."""
-        if self._plans_cache is None:
-            self._plans_cache = {
-                pid: Plan.from_dict(pid, p) for pid, p in self.data["plans"].items()
-            }
-        return self._plans_cache
+    def plan_of(self, grow: Grow) -> Plan | None:
+        """Return a grow's plan, parsed once per change."""
+        raw = grow.data.get("plan")
+        if raw is None:
+            return None
+        cached = self._plans_cache.get(grow.id)
+        if cached is None or cached[0] is not raw:
+            cached = (raw, Plan.from_dict(grow.id, raw))
+            self._plans_cache[grow.id] = cached
+        return cached[1]
 
-    def set_plan(self, plan_id: str, plan_data: dict[str, Any]) -> None:
-        """Create or replace a plan (editing a running plan keeps the grow going)."""
-        self.data["plans"][plan_id] = plan_data
-        self._plans_cache = None
-        for grow in self.grows:
-            if grow.data.get("plan_id") != plan_id or grow.is_active:
-                continue
-            plan = self.plans[plan_id]
-            if plan.stages:
+    def set_grow_plan(self, grow: str | None, plan_data: dict[str, Any]) -> None:
+        """Replace a grow's own plan (editing it keeps the grow going).
+
+        If the stage the grow was in is gone, it moves to the first stage.
+        """
+        found = self.grow(grow)
+        found.data["plan"] = copy.deepcopy(plan_data)
+        self._plans_cache.pop(found.id, None)
+        if not found.is_active:
+            plan = found.plan
+            if plan is not None and plan.stages:
                 self._log(
-                    "plan", f"{grow.name}: the current stage was removed; moved to the first stage"
+                    "plan", f"{found.name}: the current stage was removed; moved to the first stage"
                 )
-                self._enter_stage(grow, plan, plan.stages[0], self.today)
+                self._enter_stage(found, plan, plan.stages[0], self.today)
             else:
-                self._clear_grow(grow)
-        self._changed()
-
-    def delete_plan(self, plan_id: str) -> None:
-        """Delete a plan; ends every grow that was running it."""
-        for grow in self.grows:
-            if grow.data.get("plan_id") == plan_id:
-                self._log("grow", f"The plan of {grow.name} was deleted; the grow ended")
-                self._clear_grow(grow)
-        self.data["plans"].pop(plan_id, None)
-        self._plans_cache = None
+                self._clear_grow(found)
         self._changed()
 
     def update_config(self, **fields: Any) -> None:
@@ -429,22 +465,40 @@ class GrowSystem:
         if "sensors" in fields:
             sensors = {m: (fields["sensors"].get(m) or None) for m in METRICS}
             clean["sensors"] = sensors
+        if "zones" in fields or "devices" in fields:
+            zones = self._clean_zones(fields["zones"]) if "zones" in fields else None
+            if zones is not None:
+                clean["zones"] = zones
         if "devices" in fields:
             devices = []
+            zone_ids = {z["id"] for z in (zones if zones is not None else self.data["zones"])}
             for raw in fields["devices"]:
                 entity_id, name = raw.get("entity_id"), (raw.get("name") or "").strip()
                 if not entity_id or "." not in entity_id:
                     raise GrowError("Every device needs an entity")
                 name = name or entity_id
+                role = raw["role"] if "role" in raw else guess_role(entity_id, name)
+                if role and role not in PRESET_ROLES:
+                    raise GrowError(f"Unknown device role: {role}")
                 devices.append(
                     {
                         "id": raw.get("id") or self._make_id(),
                         "name": name,
                         "entity_id": entity_id,
                         "light": bool(raw.get("light", guess_is_light(entity_id, name))),
+                        "role": role,
+                        "zone": raw.get("zone") if role in LIGHT_ROLES else None,
                     }
                 )
+                if devices[-1]["zone"] not in zone_ids:
+                    devices[-1]["zone"] = None
             clean["devices"] = devices
+        elif "zones" in clean:
+            # Lights in a removed zone become unzoned.
+            known = {z["id"] for z in clean["zones"]}
+            for device in self.data["devices"]:
+                if device.get("zone") not in known:
+                    device["zone"] = None
         self.data.update(clean)
         if "maintenance" in clean:
             self._ensure_maintenance()
@@ -454,6 +508,18 @@ class GrowSystem:
                 k: v for k, v in self.rt["last_desired"].items() if k in known
             }
         self._changed()
+
+    def _clean_zones(self, raw_zones: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Validate zones: named, unique (ignoring case). Keeps ids of existing zones."""
+        zones: list[dict[str, str]] = []
+        for raw in raw_zones:
+            name = (raw.get("name") or "").strip()
+            if not name:
+                raise GrowError("A zone needs a name")
+            if any(z["name"].casefold() == name.casefold() for z in zones):
+                raise GrowError(f"There are two zones called {name}")
+            zones.append({"id": raw.get("id") or self._make_id(), "name": name})
+        return zones
 
     def set_state(self, entity_id: str, state: EntityState | None) -> None:
         """Feed an entity's latest state (from the HA websocket)."""
@@ -789,14 +855,6 @@ class GrowSystem:
     # Stage lifecycle
     # ------------------------------------------------------------------
 
-    def _plan_or_raise(self, plan_ref: str) -> Plan:
-        if plan_ref in self.plans:
-            return self.plans[plan_ref]
-        for plan in self.plans.values():
-            if plan.name.casefold() == plan_ref.casefold():
-                return plan
-        raise GrowError(f"Unknown plan: {plan_ref}")
-
     def _stage_or_raise(self, plan: Plan, stage_ref: str | int) -> Stage:
         # Ids and names first: a random hex id can be all digits.
         if not isinstance(stage_ref, int):
@@ -886,6 +944,7 @@ class GrowSystem:
     def _clear_grow(self, grow: Grow) -> None:
         rt = self.rt
         rt["grows"].pop(grow.id, None)
+        self._plans_cache.pop(grow.id, None)
         kept = []
         for inst in rt["instances"]:
             if inst.get("grow") == grow.id:
@@ -902,7 +961,7 @@ class GrowSystem:
 
     async def start_grow(
         self,
-        plan_ref: str,
+        plan_data: dict[str, Any],
         stage_ref: str | int | None = None,
         stage_started: date | None = None,
         grow_started: date | None = None,
@@ -912,7 +971,7 @@ class GrowSystem:
         replace: str | None = None,
         keep_start: bool = False,
     ) -> str:
-        """Start a plan as a new grow, optionally at a later stage and backdated.
+        """Start a grow from plan data (a template with devices filled in); the grow keeps its own copy.
 
         `stage_started` is the date the chosen stage began. Unless `grow_started` is
         given, the grow's start date is worked out from the earlier stages' lengths.
@@ -920,7 +979,7 @@ class GrowSystem:
         with `keep_start` too, the new grow counts from the replaced grow's start, as
         when the plan is changed mid-grow. Returns the grow's id.
         """
-        plan = self._plan_or_raise(plan_ref)
+        plan = Plan.from_dict("new", plan_data)
         if not plan.stages:
             raise GrowError(f"{plan.name} has no stages")
         stage = plan.stages[0] if stage_ref is None else self._stage_or_raise(plan, stage_ref)
@@ -944,12 +1003,14 @@ class GrowSystem:
             "id": grow_id,
             "name": label,
             "seq": seq,
-            "plan_id": plan.id,
+            "plan": copy.deepcopy(plan_data),
             "night_lighting": night,
             "grow_started": (grow_started or grow_start_for(plan, index, started)).isoformat(),
             "history": [],
         }
         grow = self.grow(grow_id)
+        plan = grow.plan or plan
+        stage = plan.stages[index]
         self._enter_stage(grow, plan, stage, started, include_past_tasks)
         self._log("grow", f"Started {label} ({plan.name}) at {stage.name}")
         await self._fire(
@@ -967,25 +1028,19 @@ class GrowSystem:
 
     def preview_start(
         self,
-        plan_ref: str | None = None,
+        plan_data: dict[str, Any],
         stage_ref: str | int | None = None,
         stage_started: date | None = None,
         include_past_tasks: bool = False,
-        plan_data: dict[str, Any] | None = None,
         replace: str | None = None,
         night_lighting: bool | None = None,
         keep_start: bool = False,
     ) -> dict[str, Any]:
         """Describe what starting a grow this way would do, without doing it.
 
-        Give either a saved plan (`plan_ref`) or plan data that isn't saved yet.
+        `plan_data` is a template with devices filled in; nothing is saved.
         """
-        if plan_data is not None:
-            plan = Plan.from_dict("preview", plan_data)
-        elif plan_ref is not None:
-            plan = self._plan_or_raise(plan_ref)
-        else:
-            raise GrowError("Choose a plan")
+        plan = Plan.from_dict("preview", plan_data)
         if not plan.stages:
             raise GrowError(f"{plan.name} has no stages")
         stage = plan.stages[0] if stage_ref is None else self._stage_or_raise(plan, stage_ref)

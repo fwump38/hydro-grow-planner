@@ -38,7 +38,7 @@ async def test_nothing_is_due_while_nothing_is_growing(h: Harness) -> None:
 
 
 async def test_upkeep_is_due_an_interval_after_the_grow_started(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     assert h.system.system_day == 1
     assert due_in(h, "Change the reservoir water") == 90
     assert due_in(h, "Deep-clean the system") == 180
@@ -47,7 +47,7 @@ async def test_upkeep_is_due_an_interval_after_the_grow_started(h: Harness) -> N
 
 async def test_a_grow_that_started_long_ago_has_its_upkeep_due_now(h: Harness) -> None:
     long_ago = TODAY - timedelta(days=200)
-    await h.system.start_grow("Leafy Greens", stage_ref=3, stage_started=long_ago)
+    await h.start("Leafy Greens", stage_ref=3, stage_started=long_ago)
     # 14 days of earlier stages + 200 days in this one.
     assert h.system.system_started == long_ago - timedelta(days=14)
     assert h.system.system_day == 215
@@ -57,37 +57,34 @@ async def test_a_grow_that_started_long_ago_has_its_upkeep_due_now(h: Harness) -
 
 
 async def test_switching_plans_mid_grow_keeps_counting_from_the_original_start(h: Harness) -> None:
-    gid = await h.system.start_grow(
-        "Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=10)
-    )
+    gid = await h.start("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=10))
     original = h.system.grow(gid).grow_started
     # A plan whose first stages are much shorter would otherwise give a later start.
-    await h.system.start_grow("Leafy Greens", replace=gid, stage_ref=1, keep_start=True)
+    await h.start("Leafy Greens", replace=gid, stage_ref=1, keep_start=True)
     assert h.system.grow(gid).grow_started == original
     assert h.system.grow(gid).stage.name == "Sprouting"
     # Without keep_start the start is worked out from the new plan, as before.
-    await h.system.start_grow("Leafy Greens", replace=gid, stage_ref=1)
+    await h.start("Leafy Greens", replace=gid, stage_ref=1)
     assert h.system.grow(gid).grow_started == TODAY
-    preview = h.system.preview_start("Leafy Greens", replace=gid)
+    preview = h.preview("Leafy Greens", replace=gid)
     assert preview["grow_started"] == TODAY.isoformat()
     assert (
-        h.system.preview_start("Leafy Greens", replace=gid, keep_start=True)["grow_started"]
-        == TODAY.isoformat()
+        h.preview("Leafy Greens", replace=gid, keep_start=True)["grow_started"] == TODAY.isoformat()
     )
 
 
 async def test_the_system_day_runs_from_the_oldest_running_grow(h: Harness) -> None:
     older = TODAY - timedelta(days=20)
-    await h.system.start_grow("Leafy Greens", stage_ref=3, stage_started=older, name="A")
+    await h.start("Leafy Greens", stage_ref=3, stage_started=older, name="A")
     started = h.system.system_started
-    gid = await h.system.start_grow("Leafy Greens", name="B")
+    gid = await h.start("Leafy Greens", name="B")
     assert h.system.system_started == started
     await h.system.end_grow("A")
     assert h.system.system_started == h.system.grow(gid).grow_started == TODAY
 
 
 async def test_checking_off_upkeep_schedules_the_next_one_from_today(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     h.clock.advance(days=100)
     task = upkeep(h)["Change the reservoir water"]
     assert task["overdue"]
@@ -101,7 +98,7 @@ async def test_checking_off_upkeep_schedules_the_next_one_from_today(h: Harness)
 
 
 async def test_a_deep_clean_also_counts_as_a_water_change_and_pump_clean(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     h.clock.advance(days=185)
     now = TODAY + timedelta(days=185)
     await h.system.complete_task(upkeep(h)["Deep-clean the system"]["id"])
@@ -115,7 +112,7 @@ async def test_a_deep_clean_also_counts_as_a_water_change_and_pump_clean(h: Harn
 
 
 async def test_upkeep_stops_repeating_once_nothing_is_growing(h: Harness) -> None:
-    gid = await h.system.start_grow("Leafy Greens")
+    gid = await h.start("Leafy Greens")
     await h.system.end_grow(gid)
     # Open upkeep stays (clean up after the grow), but finishing it does not schedule more.
     task = upkeep(h)["Deep-clean the system"]
@@ -126,7 +123,7 @@ async def test_upkeep_stops_repeating_once_nothing_is_growing(h: Harness) -> Non
 
 
 async def test_skipping_upkeep_pushes_it_back_a_full_interval(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     h.clock.advance(days=90)
     h.system.delete_task(upkeep(h)["Change the reservoir water"]["id"])
     assert (
@@ -135,7 +132,7 @@ async def test_skipping_upkeep_pushes_it_back_a_full_interval(h: Harness) -> Non
 
 
 async def test_settings_can_change_disable_and_add_upkeep(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     tasks = default_maintenance()
     for task in tasks:
         if task["id"] == "deep_clean":
@@ -176,7 +173,7 @@ async def test_invalid_upkeep_leaves_settings_unchanged(h: Harness) -> None:
 async def test_snapshot_and_entities_show_system_day_and_next_upkeep(h: Harness) -> None:
     snap = snapshot(h.system)
     assert snap["system_day"] is None
-    await h.system.start_grow("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=9))
+    await h.start("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=9))
     snap = snapshot(h.system)
     assert snap["system_day"] == 24
     assert {m["id"] for m in snap["maintenance"]} >= {"deep_clean", "pump_clean"}

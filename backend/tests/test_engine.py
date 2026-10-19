@@ -43,7 +43,7 @@ async def test_idle_until_started(h: Harness) -> None:
 
 
 async def test_start_grow_switches_devices_to_the_schedule(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")  # Sprouting at 12:00
+    await h.start("Leafy Greens")  # Sprouting at 12:00
     # Sprouting: side lights 06-21 on, center off, pump cycle (off at 12:00).
     assert h.system.actual(h.system.devices[1]) is True
     assert h.system.actual(h.system.devices[0]) is False
@@ -52,7 +52,7 @@ async def test_start_grow_switches_devices_to_the_schedule(h: Harness) -> None:
 
 
 async def test_manual_override_lasts_until_the_next_scheduled_change(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     side = h.system.devices[1]
     await h.system.manual_switch(side.id, False)
     h.ha.calls.clear()
@@ -68,7 +68,7 @@ async def test_manual_override_lasts_until_the_next_scheduled_change(h: Harness)
 
 
 async def test_forced_sync_reasserts_after_override(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     side = h.system.devices[1]
     await h.system.manual_switch(side.id, False)
     await h.system.sync(force=True)
@@ -77,7 +77,7 @@ async def test_forced_sync_reasserts_after_override(h: Harness) -> None:
 
 async def test_schedule_control_off_leaves_devices_alone(h: Harness) -> None:
     await h.system.set_schedule_enabled(False)
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     assert h.ha.calls == []
     await h.system.set_schedule_enabled(True)
     assert h.ha.calls
@@ -85,12 +85,12 @@ async def test_schedule_control_off_leaves_devices_alone(h: Harness) -> None:
 
 async def test_unavailable_device_is_skipped(h: Harness) -> None:
     h.system.set_state("switch.side", EntityState("unavailable"))
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     assert not any(c[2]["entity_id"] == "switch.side" for c in h.ha.calls)
 
 
 async def test_night_lighting_shifts_light_windows(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", night_lighting=True)
+    await h.start("Leafy Greens", night_lighting=True)
     # 12:00 is outside the shifted 18:00-09:00 window.
     assert h.system.actual(h.system.devices[1]) is False
 
@@ -99,7 +99,7 @@ async def test_night_lighting_shifts_light_windows(h: Harness) -> None:
 
 
 async def test_stages_never_advance_on_their_own(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     first = h.system.grow().stage
     for _ in range(40):
         h.clock.advance(days=1)
@@ -109,7 +109,7 @@ async def test_stages_never_advance_on_their_own(h: Harness) -> None:
 
 
 async def test_stage_complete_prompt_names_next_stage(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     h.clock.advance(days=6)  # stage day 7 = planned length
     await h.system.tick()
     (event,) = h.ha.fired(EVENT_STAGE_COMPLETE_DUE)
@@ -119,7 +119,7 @@ async def test_stage_complete_prompt_names_next_stage(h: Harness) -> None:
 
 
 async def test_advance_and_previous_undo_restores_progress(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     check = item(h, "Check water volume")
     await h.system.complete_task(check["id"])
     await h.system.advance_stage()
@@ -133,7 +133,7 @@ async def test_advance_and_previous_undo_restores_progress(h: Harness) -> None:
 
 
 async def test_last_and_first_stage_limits(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    await h.start("Leafy Greens", stage_ref=3)
     with pytest.raises(GrowError):
         await h.system.advance_stage()
     await h.system.set_stage(1)
@@ -142,7 +142,7 @@ async def test_last_and_first_stage_limits(h: Harness) -> None:
 
 
 async def test_restart_stage_resets_the_day(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     h.clock.advance(days=3)
     assert h.system.grow().stage_day == 4
     await h.system.restart_stage()
@@ -154,16 +154,14 @@ async def test_restart_stage_resets_the_day(h: Harness) -> None:
 
 async def test_start_mid_cycle_derives_grow_start_and_day(h: Harness) -> None:
     # Vegetative began 10 days ago; Sprouting + Seedling took 14 days before that.
-    await h.system.start_grow(
-        "Leafy Greens", stage_ref="Vegetative", stage_started=TODAY - timedelta(days=10)
-    )
+    await h.start("Leafy Greens", stage_ref="Vegetative", stage_started=TODAY - timedelta(days=10))
     assert h.system.grow().stage_day == 11
     assert h.system.grow().grow_day == 25
     assert h.system.grow().grow_started == TODAY - timedelta(days=24)
 
 
 async def test_start_mid_cycle_recurring_tasks_are_due_today(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=10))
+    await h.start("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=10))
     due = {t["title"]: t["due"] for t in h.system.task_items()}
     assert due["Move the grow lights"] == TODAY.isoformat()
     assert due["Add nutrients"] == TODAY.isoformat()
@@ -171,7 +169,7 @@ async def test_start_mid_cycle_recurring_tasks_are_due_today(h: Harness) -> None
 
 
 async def test_start_mid_cycle_can_include_past_one_offs_as_overdue(h: Harness) -> None:
-    await h.system.start_grow(
+    await h.start(
         "Leafy Greens",
         stage_ref=3,
         stage_started=TODAY - timedelta(days=10),
@@ -182,16 +180,16 @@ async def test_start_mid_cycle_can_include_past_one_offs_as_overdue(h: Harness) 
 
 async def test_unknown_plan_or_stage(h: Harness) -> None:
     with pytest.raises(GrowError):
-        await h.system.start_grow("Nope")
+        await h.start("Nope")
     with pytest.raises(GrowError):
-        await h.system.start_grow("Leafy Greens", stage_ref="Flowering")
+        await h.start("Leafy Greens", stage_ref="Flowering")
 
 
 # -- recurring tasks ------------------------------------------------------------------------
 
 
 async def test_recurring_task_reappears_three_days_after_completion(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    await h.start("Leafy Greens", stage_ref=3)
     first = item(h, "Move the grow lights")
     h.clock.advance(days=2)  # complete two days late
     await h.system.complete_task(first["id"])
@@ -205,7 +203,7 @@ async def test_recurring_task_reappears_three_days_after_completion(h: Harness) 
 
 
 async def test_recurring_task_keeps_going_past_the_planned_stage_length(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    await h.start("Leafy Greens", stage_ref=3)
     for _ in range(40):  # 120 days of completions: well past the 90 day stage
         current = item_open(h, "Add nutrients")
         h.clock.advance(days=3)
@@ -226,7 +224,7 @@ async def test_custom_repeating_task(h: Harness) -> None:
 
 
 async def test_custom_tasks_survive_stage_changes_but_plan_tasks_do_not(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     await h.system.add_custom_task("Buy nutrients")
     await h.system.advance_stage()
     assert "Buy nutrients" in titles(h)
@@ -267,7 +265,7 @@ async def test_done_tasks_are_pruned_after_a_week(h: Harness) -> None:
 
 async def test_daily_reminder_fires_once_after_reminder_time(h: Harness) -> None:
     h.clock.current = h.clock.current.replace(hour=7)
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     await h.system.tick()
     assert h.ha.fired(EVENT_TASKS_DUE) == []  # 07:00 is before 08:00
     h.clock.advance(hours=2)
@@ -287,7 +285,7 @@ async def test_no_reminder_when_nothing_is_due(h: Harness) -> None:
 
 
 async def test_reading_overdue_fires_once_until_a_reading_is_recorded(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     h.clock.advance(days=3)
     await h.system.tick()
     await h.system.tick()
@@ -303,7 +301,7 @@ async def test_reading_overdue_fires_once_until_a_reading_is_recorded(h: Harness
 
 
 async def test_record_reading_logs_exactly_one_row(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
+    await h.start("Leafy Greens")
     await h.system.record_reading(ph=6.1)
     assert len(h.readings.rows) == 1
     assert h.readings.rows[0][2] == 6.1
@@ -312,7 +310,7 @@ async def test_record_reading_logs_exactly_one_row(h: Harness) -> None:
 
 async def test_ec_is_entered_in_the_display_unit_and_checked_in_ms_cm(h: Harness) -> None:
     h.system.data["ec_unit"] = "ppm 500"
-    await h.system.start_grow("Leafy Greens", stage_ref=3)  # EC range 1.2-2.0 mS/cm
+    await h.start("Leafy Greens", stage_ref=3)  # EC range 1.2-2.0 mS/cm
     await h.system.record_reading(ec=700)
     assert h.system.ec == pytest.approx(1.4)
     assert h.system.ec_display == 700
@@ -329,7 +327,7 @@ async def test_reading_validation(h: Harness) -> None:
 
 
 async def test_ph_alert_is_debounced_and_clears(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")  # pH 5.8-6.5
+    await h.start("Leafy Greens")  # pH 5.8-6.5
     await h.system.record_reading(ph=7.4)
     assert h.ha.fired(EVENT_OUT_OF_RANGE) == []
     h.clock.advance(minutes=11)
@@ -355,7 +353,7 @@ async def test_ec_sensor_unit_is_detected_and_converted(h: Harness) -> None:
 
 async def test_climate_ranges_use_the_plan_unit(h: Harness) -> None:
     h.system.data["sensors"]["temperature"] = "sensor.temp"
-    await h.system.start_grow("Leafy Greens")  # 65-75 °F
+    await h.start("Leafy Greens")  # 65-75 °F
     h.system.set_state("sensor.temp", EntityState("21", "°C"))  # 69.8 °F
     assert h.system.temperature == pytest.approx(69.8)
     assert h.system.is_out_of_range("temperature") is False
@@ -366,17 +364,24 @@ async def test_climate_ranges_use_the_plan_unit(h: Harness) -> None:
 # -- plans ---------------------------------------------------------------------------------------
 
 
-async def test_deleting_the_running_plan_ends_the_grow(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens")
-    h.system.delete_plan("leafy")
+async def test_a_plan_without_stages_ends_the_grow(h: Harness) -> None:
+    await h.start("Leafy Greens")
+    h.edit(stages=[])
     assert not h.system.is_active
 
 
+async def test_a_grow_keeps_its_own_copy_of_the_plan(h: Harness) -> None:
+    await h.start("Leafy Greens", name="A")
+    h.plans["Leafy Greens"]["ph_min"] = 4.0  # the source changing later doesn't touch the grow
+    await h.start("Leafy Greens", name="B")
+    h.edit("A", ph_min=5.5)
+    assert h.system.grow("A").plan.ph_min == 5.5
+    assert h.system.grow("B").plan.ph_min == 4.0
+
+
 async def test_removing_the_current_stage_moves_to_the_first(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
-    plan = dict(h.system.data["plans"]["leafy"])
-    plan["stages"] = plan["stages"][:2]
-    h.system.set_plan("leafy", plan)
+    await h.start("Leafy Greens", stage_ref=3)
+    h.edit(stages=h.system.grow().data["plan"]["stages"][:2])
     assert h.system.grow().stage.name == "Sprouting"
 
 
@@ -390,7 +395,7 @@ async def test_snapshot_shape(h: Harness) -> None:
     assert idle["active"] is False and idle["grows"] == []
 
     h.system.data["ec_unit"] = "ppm 500"
-    await h.system.start_grow("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=4))
+    await h.start("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=4))
     await h.system.record_reading(ph=6.1, ec=800)
     snap = snapshot(h.system, with_profiles=True)
     [grow] = snap["grows"]
@@ -409,16 +414,14 @@ async def test_snapshot_shape(h: Harness) -> None:
 
 
 async def test_all_digit_stage_id_is_not_mistaken_for_a_stage_number(h: Harness) -> None:
-    plan = h.system.data["plans"]["leafy"]
-    plan["stages"][0]["id"] = "73984280"
-    h.system.set_plan("leafy", plan)
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    h.plans["Leafy Greens"]["stages"][0]["id"] = "73984280"
+    await h.start("Leafy Greens", stage_ref=3)
     await h.system.set_stage("73984280")
     assert h.system.grow().stage.name == "Sprouting"
 
 
 async def test_an_idle_tick_signals_no_change(h: Harness) -> None:
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    await h.start("Leafy Greens", stage_ref=3)
     await h.system.tick()
     changes, saves = h.changes, h.saves
     for _ in range(5):
@@ -428,7 +431,7 @@ async def test_an_idle_tick_signals_no_change(h: Harness) -> None:
 
 async def test_preview_start_changes_nothing_and_describes_the_result(h: Harness) -> None:
     started = TODAY - timedelta(days=10)
-    preview = h.system.preview_start("Leafy Greens", "Vegetative", started)
+    preview = h.preview("Leafy Greens", "Vegetative", started)
     assert not h.system.is_active and h.ha.calls == []
     assert preview["stage"] == "Vegetative" and preview["stage_day"] == 11
     assert preview["grow_started"] == (TODAY - timedelta(days=24)).isoformat()
@@ -443,6 +446,6 @@ async def test_preview_start_changes_nothing_and_describes_the_result(h: Harness
     pump = next(d for d in preview["devices"] if d["name"] == "Water pump")
     assert pump["desired"] is True  # 12:00 falls inside a run (the pump cycles from midnight)
 
-    with_past = h.system.preview_start("Leafy Greens", 3, started, include_past_tasks=True)
+    with_past = h.preview("Leafy Greens", 3, started, include_past_tasks=True)
     assert "Vegetative" in {t["title"] for t in with_past["tasks"]}
     assert with_past["skipped_tasks"] == []

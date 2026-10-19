@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -10,7 +11,7 @@ import pytest
 
 from grow_planner.core.models import new_id
 from grow_planner.core.presets import PRESET_ROLES, build_from_preset
-from grow_planner.engine import GrowSystem, new_system_data
+from grow_planner.engine import GrowError, GrowSystem, new_system_data
 from grow_planner.ports import EntityState
 
 TZ = ZoneInfo("America/Denver")
@@ -93,7 +94,10 @@ class Harness:
             "water_pump": "d_pump",
         }
         assert set(role_map) == set(PRESET_ROLES)
-        data["plans"]["leafy"] = build_from_preset("leafy_greens", role_map, new_id)
+        # Plan data by name; each grow started from one keeps its own copy.
+        self.plans: dict[str, dict[str, Any]] = {
+            "Leafy Greens": build_from_preset("leafy_greens", role_map, new_id)
+        }
         self.system = GrowSystem(
             data,
             self.ha,
@@ -106,6 +110,25 @@ class Harness:
         self.ha.system = self.system
         for entity in ("switch.center", "switch.side", "switch.pump"):
             self.system.set_state(entity, EntityState("off"))
+
+    def plan(self, ref: str) -> dict[str, Any]:
+        if ref not in self.plans:
+            raise GrowError(f"Unknown plan: {ref}")
+        return self.plans[ref]
+
+    async def start(self, ref: str, *args: Any, **kwargs: Any) -> str:
+        """Start a grow from one of the harness's plans."""
+        return await self.system.start_grow(self.plan(ref), *args, **kwargs)
+
+    def preview(self, ref: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return self.system.preview_start(self.plan(ref), *args, **kwargs)
+
+    def edit(self, grow: str | None = None, **changes: Any) -> dict[str, Any]:
+        """Change a running grow's own plan, as the plan editor does."""
+        plan = copy.deepcopy(self.system.grow(grow).data["plan"])
+        plan.update(changes)
+        self.system.set_grow_plan(grow, plan)
+        return plan
 
     def _saved(self) -> None:
         self.saves += 1

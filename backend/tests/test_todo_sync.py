@@ -44,7 +44,7 @@ async def setup(
     h.system.data["todo_entity"] = "todo.grow"
     h.system.data["todo_adopt"] = adopt
     sync = TodoSync(h.system, todo)
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    await h.start("Leafy Greens", stage_ref=3)
     await sync.reconcile()
     return sync, todo
 

@@ -182,7 +182,7 @@ function Detail(props: { id: string; meta: Meta; ecUnit: string; onBack: () => v
         <button class="btn" onClick={async () => { const copy = await run(() => api.duplicateTemplate(tpl.id)); if (copy) props.onEdit(copy.id); }}>Duplicate &amp; edit</button>
         {tpl.builtin ? null : <button class="btn" onClick={() => props.onEdit(tpl.id)}>Edit</button>}
         <button class="btn" onClick={exportJson}>Export JSON</button>
-        {tpl.builtin ? null : <ConfirmButton label="Delete" class="danger" question={`Delete “${tpl.name}”? Plans already made from it are not affected.`} confirmLabel="Delete" onConfirm={() => run(() => api.deleteTemplate(tpl.id), "Deleted").then((ok) => ok && props.onBack())} />}
+        {tpl.builtin ? null : <ConfirmButton label="Delete" class="danger" question={`Delete “${tpl.name}”? Grows already started from it are not affected.`} confirmLabel="Delete" onConfirm={() => run(() => api.deleteTemplate(tpl.id), "Deleted").then((ok) => ok && props.onBack())} />}
       </div>
       <p class="muted">{tpl.stages.length} stages · {tpl.stages.reduce((n, s) => n + s.days, 0)} days{ranges.length ? ` · ${ranges.join(" · ")}` : ""}</p>
       {tpl.stages.map((s, i) => <StageBlock key={i} stage={s} index={i} roles={props.meta.roles} ecUnit={props.ecUnit} />)}

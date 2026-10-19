@@ -119,10 +119,9 @@ def test_summary_and_snapshot_carry_the_harvest_style(h: Harness) -> None:
 
 
 async def test_a_continuous_plan_ends_by_asking_if_the_plants_are_spent(h: Harness) -> None:
-    h.system.data["plans"]["leafy"]["harvest_style"] = "continuous"
-    h.system.data["plans"]["leafy"]["stages"][-1]["outcome"] = "Regrowth has slowed."
-    h.system.set_plan("leafy", h.system.data["plans"]["leafy"])
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    h.plans["Leafy Greens"]["harvest_style"] = "continuous"
+    h.plans["Leafy Greens"]["stages"][-1]["outcome"] = "Regrowth has slowed."
+    await h.start("Leafy Greens", stage_ref=3)
     check = next(t for t in h.system.task_items() if t["title"].startswith("Check if"))
     assert check["title"] == "Check if it's time to finish the grow"
     assert "Regrowth has slowed." in check["note"] and "Restart stage" in check["note"]
@@ -130,8 +129,7 @@ async def test_a_continuous_plan_ends_by_asking_if_the_plants_are_spent(h: Harne
 
 
 async def test_a_single_harvest_plan_keeps_the_usual_wording(h: Harness) -> None:
-    h.system.data["plans"]["leafy"]["harvest_style"] = "once"
-    h.system.set_plan("leafy", h.system.data["plans"]["leafy"])
-    await h.system.start_grow("Leafy Greens", stage_ref=3)
+    h.plans["Leafy Greens"]["harvest_style"] = "once"
+    await h.start("Leafy Greens", stage_ref=3)
     check = next(t for t in h.system.task_items() if t["title"].startswith("Check if"))
     assert check["title"] == "Check if ready to finish the grow"

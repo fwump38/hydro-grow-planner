@@ -3,8 +3,9 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "./api";
 import { setDirty } from "./guard";
 import { dayLabel } from "./format";
-import type { DeviceConfig, EntityRow, Meta, Metric, Snapshot, SystemConfig, SystemRow } from "./types";
+import type { EntityRow, Meta, Metric, Snapshot, SystemConfig, SystemRow } from "./types";
 import { ConfirmButton, Field, NumberInput, useAction } from "./ui";
+import { DevicesEditor, EntityPicker, ZonesEditor } from "./SetupParts";
 
 interface Props {
   snap: Snapshot;
@@ -13,34 +14,11 @@ interface Props {
   onSnap: (s: Snapshot) => void;
   onSelect: (id: string) => void;
   onChanged: () => void;
+  /** Walk through zones and devices for a system. */
+  onSetup: (id: string) => void;
 }
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
-
-function EntityPicker(props: { value: string | null; entities: EntityRow[]; onChange: (v: string | null) => void; label: string; placeholder?: string }) {
-  const listId = useMemo(() => `entities-${Math.random().toString(36).slice(2)}`, []);
-  const known = props.entities.find((e) => e.entity_id === props.value);
-  return (
-    <>
-      <input
-        type="text"
-        aria-label={props.label}
-        list={listId}
-        placeholder={props.placeholder ?? "Search by name or entity id"}
-        value={props.value ?? ""}
-        onInput={(e) => {
-          const text = (e.currentTarget as HTMLInputElement).value.trim();
-          const byName = props.entities.find((x) => x.name.toLowerCase() === text.toLowerCase());
-          props.onChange(byName ? byName.entity_id : text || null);
-        }}
-      />
-      <datalist id={listId}>
-        {props.entities.map((e) => <option value={e.entity_id} key={e.entity_id}>{e.name}</option>)}
-      </datalist>
-      {props.value && !known ? <span class="error-text">Home Assistant doesn't know this entity right now</span> : known ? <span class="small muted">{known.name}</span> : null}
-    </>
-  );
-}
 
 const SENSORS: [Metric, string, string[]][] = [
   ["ph", "pH sensor", ["sensor"]],
@@ -49,7 +27,7 @@ const SENSORS: [Metric, string, string[]][] = [
   ["humidity", "Room humidity sensor", ["sensor"]],
 ];
 
-export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged }: Props) {
+export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged, onSetup }: Props) {
   const [saved, setSaved] = useState<SystemConfig | null>(null);
   const [draft, setDraft] = useState<SystemConfig | null>(null);
   const [entities, setEntities] = useState<EntityRow[]>([]);
@@ -104,7 +82,7 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged }: P
             </select>
           ) : null}
           <input type="text" style="width:200px" placeholder="Add another system" aria-label="New system name" value={newName} onInput={(e) => setNewName((e.currentTarget as HTMLInputElement).value)} />
-          <button class="btn" disabled={busy || !newName.trim()} onClick={async () => { const s = await run(() => api.createSystem(newName), "System created"); if (s) { setNewName(""); onChanged(); onSelect(s.id); } }}>Add</button>
+          <button class="btn" disabled={busy || !newName.trim()} onClick={async () => { const s = await run(() => api.createSystem(newName), "System created"); if (s) { setNewName(""); await onChanged(); onSelect(s.id); onSetup(s.id); } }}>Add</button>
           <span class="grow" />
           <ConfirmButton label="Delete this system" class="danger" confirmLabel="Delete" question={`Delete “${snap.name}”, its plans, tasks and Home Assistant entities?`}
             onConfirm={() => run(() => api.deleteSystem(snap.id), "System deleted").then((ok) => ok !== undefined && onChanged())} />
@@ -112,26 +90,11 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged }: P
       </section>
 
       <section class="card">
-        <div class="row between"><h2>Devices</h2><button class="btn small" onClick={() => edit((c) => c.devices.push({ name: "", entity_id: "", light: false }))}>+ Add device</button></div>
-        <p class="muted small">Anything with an on/off: switches, lights, fans. Schedules turn these on and off.</p>
-        {draft.devices.length === 0 ? <p class="muted">No devices yet.</p> : null}
-        {draft.devices.map((d: DeviceConfig, i) => (
-          <div class="task-edit" key={d.id ?? i}>
-            <div class="cols2">
-              <Field label="Name"><input type="text" value={d.name} onInput={(e) => edit((c) => (c.devices[i].name = (e.currentTarget as HTMLInputElement).value))} /></Field>
-              <Field label="Entity">
-                <EntityPicker label={`Entity for ${d.name || "device"}`} value={d.entity_id || null} entities={switchable} onChange={(v) => edit((c) => {
-                  c.devices[i].entity_id = v ?? "";
-                  if (!c.devices[i].name && v) c.devices[i].name = entities.find((e) => e.entity_id === v)?.name ?? v;
-                })} />
-              </Field>
-            </div>
-            <div class="row between">
-              <label class="check"><input type="checkbox" checked={d.light} onChange={(e) => edit((c) => (c.devices[i].light = (e.currentTarget as HTMLInputElement).checked))} />Grow light (follows Night lighting)</label>
-              <button class="btn small danger" onClick={() => edit((c) => c.devices.splice(i, 1))}>Remove</button>
-            </div>
-          </div>
-        ))}
+        <ZonesEditor draft={draft} edit={edit} />
+      </section>
+
+      <section class="card">
+        <DevicesEditor draft={draft} edit={edit} entities={switchable} all={entities} meta={meta} />
       </section>
 
       <section class="card">

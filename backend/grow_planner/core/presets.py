@@ -8,6 +8,7 @@ Light windows are the daytime versions; the Night lighting switch shifts them.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .presets_data import PRESETS
@@ -21,6 +22,33 @@ PRESET_ROLES: dict[str, str] = {
     ROLE_SIDE_LIGHTS: "Side lights",
     ROLE_WATER_PUMP: "Water pump",
 }
+
+
+_ROLE_HINTS = (
+    (ROLE_WATER_PUMP, re.compile(r"pump|water", re.I)),
+    (ROLE_SIDE_LIGHTS, re.compile(r"side", re.I)),
+    (ROLE_CENTER_LIGHTS, re.compile(r"center|centre|main|top", re.I)),
+)
+LIGHT_ROLES = (ROLE_CENTER_LIGHTS, ROLE_SIDE_LIGHTS)
+
+
+def guess_role(entity_id: str, name: str) -> str:
+    """Guess which template role a device plays from its name ("" if unclear)."""
+    text = f"{name} {entity_id}"
+    return next((role for role, hint in _ROLE_HINTS if hint.search(text)), "")
+
+
+def role_map_for_zones(devices: list[dict[str, Any]], zone_ids: list[str]) -> dict[str, list[str]]:
+    """Map template roles onto devices: lights from the chosen zones, the pump from everywhere.
+
+    The pump is system-wide (every grow shares the reservoir), so it ignores zones.
+    """
+    roles: dict[str, list[str]] = {}
+    for device in devices:
+        role = device.get("role") or ""
+        if role == ROLE_WATER_PUMP or (role in LIGHT_ROLES and device.get("zone") in zone_ids):
+            roles.setdefault(role, []).append(device["id"])
+    return roles
 
 
 def preset_label(key: str) -> str:

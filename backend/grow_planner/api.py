@@ -21,7 +21,12 @@ from .core import units
 from .core.const import EC_UNITS, HARVEST_STYLES, SCHEDULE_MODES, STAGE_TYPES, TASK_TYPES
 from .core.events_doc import EVENTS, example_payload
 from .core.models import new_id
-from .core.presets import PRESET_ROLES, build_from_template, plan_to_template
+from .core.presets import (
+    PRESET_ROLES,
+    build_from_template,
+    plan_to_template,
+    role_map_for_zones,
+)
 from .core.validate import normalize_plan
 from .engine import GrowError, GrowSystem
 from .snapshot import snapshot
@@ -182,6 +187,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         keys = (
             "name",
             "devices",
+            "zones",
             "sensors",
             "ec_unit",
             "ec_sensor_unit",
@@ -249,8 +255,13 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         ]
         return _json({"ec_unit": unit, "readings": rows})
 
-    def role_map_of(body: dict[str, Any]) -> dict[str, list[str]]:
-        """Read {role: device id | [device ids]} from a request, dropping empty roles."""
+    def role_map_of(body: dict[str, Any], system: GrowSystem) -> dict[str, list[str]]:
+        """Read {role: device ids} from a request: from chosen `zones`, or an explicit `role_map`."""
+        if body.get("zones") is not None:
+            zone_ids = list(body["zones"])
+            if unknown := set(zone_ids) - {z["id"] for z in system.data["zones"]}:
+                raise GrowError(f"Unknown zone: {', '.join(sorted(unknown))}")
+            return role_map_for_zones(system.data["devices"], zone_ids)
         roles: dict[str, list[str]] = {}
         for role, value in (body.get("role_map") or {}).items():
             ids = [value] if isinstance(value, str) else list(value or [])
@@ -260,6 +271,24 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
 
     def device_keys(system: GrowSystem) -> set[str]:
         return {d["id"] for d in system.data["devices"]}
+
+    class PlanInvalid(Exception):
+        def __init__(self, problems: list[dict[str, str]]) -> None:
+            self.problems = problems
+
+    def plan_for_new_grow(system: GrowSystem, body: dict[str, Any]) -> dict[str, Any]:
+        """Build the plan a new grow will keep: the chosen template with this system's devices."""
+        if not body.get("template"):
+            raise GrowError("Choose a template")
+        template = get_template(app.store, body["template"])
+        role_map = role_map_of(body, system)
+        if {d for ids in role_map.values() for d in ids} - device_keys(system):
+            raise GrowError("Unknown device in the role mapping")
+        data = build_from_template(template, role_map, new_id)
+        plan, problems = normalize_plan(data, new_id, device_keys(system))
+        if problems:
+            raise PlanInvalid(problems)
+        return plan
 
     # -- grow lifecycle ----------------------------------------------------------------------------
 
@@ -280,22 +309,22 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             "night_lighting": body.get("night_lighting"),
             "keep_start": bool(body.get("keep_grow_start")),
         }
-        if body.get("template"):
-            # Preview a template before a plan exists for it.
-            template = get_template(app.store, body["template"])
-            data = build_from_template(template, role_map_of(body), new_id)
-            plan, problems = normalize_plan(data, new_id, device_keys(system))
-            if problems:
-                return _json({"errors": problems}, 422)
-            return _json(system.preview_start(plan_data=plan, **args))
-        return _json(system.preview_start(plan_ref=body["plan"], **args))
+        try:
+            plan = plan_for_new_grow(system, body)
+        except PlanInvalid as err:
+            return _json({"errors": err.problems}, 422)
+        return _json(system.preview_start(plan_data=plan, **args))
 
     @r.post("/api/systems/{sid}/grows")
     async def start(request: web.Request) -> web.Response:
         system = _system(request)
         body = await _body(request)
+        try:
+            plan = plan_for_new_grow(system, body)
+        except PlanInvalid as err:
+            return _json({"errors": err.problems}, 422)
         await system.start_grow(
-            plan_ref=body["plan"],
+            plan_data=plan,
             **start_args(body),
             grow_started=_date(body.get("grow_started")),
             night_lighting=body.get("night_lighting"),
@@ -380,60 +409,22 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         system.delete_task(request.match_info["tid"])
         return _view(system)
 
-    # -- plans -------------------------------------------------------------------------------------
+    # -- a grow's own plan -------------------------------------------------------------------------
 
-    @r.get("/api/systems/{sid}/plans")
-    async def get_plans(request: web.Request) -> web.Response:
-        return _json(_system(request).data["plans"])
+    @r.get("/api/systems/{sid}/grows/{gid}/plan")
+    async def get_grow_plan(request: web.Request) -> web.Response:
+        grow = _system(request).grow(request.match_info["gid"])
+        return _json(grow.data["plan"])
 
-    @r.post("/api/systems/{sid}/plans")
-    async def create_plan(request: web.Request) -> web.Response:
+    @r.put("/api/systems/{sid}/grows/{gid}/plan")
+    async def put_grow_plan(request: web.Request) -> web.Response:
         system = _system(request)
-        body = await _body(request)
-        if body.get("template"):
-            template = get_template(app.store, body["template"])
-            role_map = role_map_of(body)
-            unknown = {d for ids in role_map.values() for d in ids} - device_keys(system)
-            if unknown:
-                raise GrowError("Unknown device in the role mapping")
-            data = build_from_template(template, role_map, new_id, body.get("name") or None)
-        else:
-            data = {
-                "name": body.get("name") or "New plan",
-                "stages": [
-                    {
-                        "name": "Stage 1",
-                        "stage_type": "other",
-                        "days": 7,
-                        "schedules": {},
-                        "tasks": [],
-                    }
-                ],
-            }
-        plan, problems = normalize_plan(data, new_id, device_keys(system))
-        if problems:
-            return _json({"errors": problems}, 422)
-        plan_id = new_id()
-        system.set_plan(plan_id, plan)
-        return _json({"plan_id": plan_id, "plan": plan})
-
-    @r.put("/api/systems/{sid}/plans/{pid}")
-    async def put_plan(request: web.Request) -> web.Response:
-        system = _system(request)
-        plan_id = request.match_info["pid"]
-        if plan_id not in system.data["plans"]:
-            raise web.HTTPNotFound
+        grow = system.grow(request.match_info["gid"])
         plan, problems = normalize_plan(await _body(request), new_id, device_keys(system))
         if problems:
             return _json({"errors": problems}, 422)
-        system.set_plan(plan_id, plan)
+        system.set_grow_plan(grow.id, plan)
         return _json({"plan": plan})
-
-    @r.delete("/api/systems/{sid}/plans/{pid}")
-    async def delete_plan(request: web.Request) -> web.Response:
-        system = _system(request)
-        system.delete_plan(request.match_info["pid"])
-        return _view(system)
 
     # -- templates ---------------------------------------------------------------------------------
 
@@ -467,15 +458,11 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
                 data = {**json.loads(json.dumps(source)), "name": f"{source['name']} (copy)"}
                 if body.get("name"):
                     data["name"] = body["name"]
-            elif body.get("from_plan"):
-                spec = body["from_plan"]
+            elif body.get("from_grow"):
+                spec = body["from_grow"]
                 system = app.get(spec["system_id"])
-                plan = system.data["plans"].get(spec["plan_id"])
-                if plan is None:
-                    raise GrowError("Unknown plan")
-                roles = {
-                    dev: role for dev, role in (spec.get("device_roles") or {}).items() if role
-                }
+                plan = system.grow(spec["grow_id"]).data["plan"]
+                roles = {d["id"]: d["role"] for d in system.data["devices"] if d.get("role")}
                 data = plan_to_template(plan, roles)
                 if body.get("name"):
                     data["name"] = body["name"]

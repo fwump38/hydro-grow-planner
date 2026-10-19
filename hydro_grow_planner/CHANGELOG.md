@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0
+
+- **Zones and device roles.** Give each device a role (center light, side light, pump) and put lights into
+  zones such as *Layers 1+2* in Settings. Starting a grow is now two steps: pick a template and a zone, and the
+  lights and shared pump are filled in for you. Zones in use by a running grow are marked and free up when it
+  ends. Existing devices get a role guessed from their name.
+- **Guided setup for a new system**: name it, group its lights into zones, then add its devices with their
+  roles. It also opens when you add another system, or from *Set up zones…* when you try to start a grow in
+  a system that has none. The old tick-the-devices screen is gone.
+- **Plans are gone: a grow keeps its own copy of its template.** Starting a grow no longer creates a separate
+  plan to manage. The grow holds the template's schedules, tasks and targets; change them with **Overview →
+  Edit plan…** (it affects only that grow) and keep a good one with *Save as template*. The *Plan* tab is
+  removed. Plans you had saved move into the grows running them; any plan no grow was using becomes a custom
+  template, so nothing is lost.
+  - Removed the per-grow *Plan* select entity in Home Assistant (it switched plans or ended the grow).
+    End or change a grow in the panel instead.
+- **Fixed the Start a grow dialog running off the screen** with many devices; it now scrolls.
+
 ## 0.5.1
 
 - **Safe to point at a shared to-do list** (e.g. your iCloud Reminders list). The sync only adds, checks

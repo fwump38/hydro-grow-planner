@@ -1,42 +1,42 @@
-// Start, add or change a grow: template → devices → name, stage and date → review.
+// Start, add or change a grow: template and zone → name, stage and date with a live review.
+// The grow keeps its own copy of the template, which can be edited afterwards.
 
 import { useEffect, useMemo, useState } from "preact/hooks";
 
 import { ApiError, api, type StartArgs } from "./api";
 import { addDays, dayLabel, shortDate, today } from "./format";
-import { RoleMapper } from "./RoleMapper";
-import { guessRoles, type RoleMap } from "./roles";
-import type { Meta, Plan, Preview, Snapshot, TemplateCard } from "./types";
+import { busyWith, defaultZones, zoneLabel } from "./roles";
+import type { Meta, Preview, Snapshot, TemplateCard } from "./types";
 import { Badge, Dialog, Field, NumberInput, Switch, useAction } from "./ui";
 
 interface Props {
   snap: Snapshot;
   meta: Meta;
-  /** Preselect a template ("builtin:…"/"custom:…") or one of this system's plans, or replace a running grow (id). */
-  initial?: { template?: string; plan?: string; replace?: string };
+  /** Preselect a template ("builtin:…"/"custom:…"), or replace a running grow (id). */
+  initial?: { template?: string; replace?: string };
   onClose: () => void;
   onDone: (snap: Snapshot) => void;
+  /** Close this and walk through setting up zones and devices. */
+  onSetupZones: () => void;
 }
 
-type Source = { kind: "template"; id: string } | { kind: "plan"; id: string } | null;
-const STEPS = ["Template", "Devices", "Stage & date", "Review"];
+const STEPS = ["Template & zone", "Details & review"];
 
 function daysBetween(from: string, to: string): number {
   return Math.round((new Date(`${to}T00:00:00`).getTime() - new Date(`${from}T00:00:00`).getTime()) / 86_400_000);
 }
 
-export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
+export function Wizard({ snap, initial, onClose, onDone, onSetupZones }: Props) {
   const [templates, setTemplates] = useState<TemplateCard[]>([]);
-  const [plans, setPlans] = useState<Record<string, Plan>>({});
-  const [source, setSource] = useState<Source>(
-    initial?.plan ? { kind: "plan", id: initial.plan } : initial?.template ? { kind: "template", id: initial.template } : null,
-  );
-  const [step, setStep] = useState(source ? (initial?.plan ? 2 : 1) : 0);
+  const [template, setTemplate] = useState<string | null>(initial?.template ?? null);
+  const [step, setStep] = useState(0);
   const replacing = snap.grows.find((g) => g.id === initial?.replace);
-  // Lights another grow already runs are not offered by default; the pump is meant to be shared.
-  const inUse = (d: Snapshot["devices"][number]) => d.drivers.filter((x) => x.grow_id !== replacing?.id);
-  const [roles, setRoles] = useState<RoleMap>(() =>
-    guessRoles(Object.keys(meta.roles), snap.devices, new Set(snap.devices.filter((d) => d.light && inUse(d).length).map((d) => d.id))),
+  // Zones (groups of lights) are set up in Settings or the setup walkthrough.
+  const useZones = snap.zones.length > 0;
+  const [zoneIds, setZoneIds] = useState<string[]>(() =>
+    replacing
+      ? snap.zones.filter((z) => snap.devices.some((d) => d.zone === z.id && d.drivers.some((x) => x.grow_id === replacing.id))).map((z) => z.id)
+      : defaultZones(snap.zones),
   );
   const [name, setName] = useState(replacing?.name ?? "");
   const [nameEdited, setNameEdited] = useState(Boolean(replacing));
@@ -53,27 +53,30 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
 
   useEffect(() => {
     api.templates().then(setTemplates);
-    api.plans(snap.id).then(setPlans);
   }, []);
 
-  // Learn the stage names/lengths of whatever was picked.
+  // Learn the stage names/lengths of the template.
   useEffect(() => {
-    if (!source) return;
-    const load = source.kind === "plan" ? Promise.resolve(plans[source.id]) : api.template(source.id);
-    load.then((p) => {
-      if (!p) return;
-      if (!nameEdited) setName(p.name);
+    if (!template) return;
+    api.template(template).then((p) => {
+      if (!nameEdited && !useZones) setName(p.name);
       setStageNames(p.stages.map((s) => ({ name: s.name, days: s.days })));
       setStage((current) => Math.min(Math.max(current, 1), p.stages.length));
     });
-  }, [source?.kind, source?.id, plans]);
+  }, [template]);
+
+  // Name a new grow after its zones until the user types their own.
+  useEffect(() => {
+    if (!nameEdited && useZones && zoneIds.length) setName(zoneLabel(snap.zones, zoneIds));
+  }, [zoneIds]);
 
   const stageInfo = stageNames[stage - 1];
   const dayOfStage = daysBetween(started, today()) + 1;
 
   const args = useMemo(
     (): StartArgs => ({
-      ...(source?.kind === "plan" ? { plan: source.id } : { template: source?.id, role_map: roles }),
+      template: template ?? undefined,
+      zones: zoneIds,
       stage,
       stage_started: started,
       include_past_tasks: includePast,
@@ -81,52 +84,34 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
       night_lighting: night,
       keep_grow_start: replacing ? keepStart : undefined,
     }),
-    [source?.kind, source?.id, roles, stage, started, includePast, night, keepStart],
+    [template, zoneIds, stage, started, includePast, night, keepStart],
   );
 
   useEffect(() => {
-    if (step !== 3 || !source) return;
+    if (step !== 1 || !template) return;
     setPreview(null);
     setPreviewError(null);
     api.previewStart(snap.id, args).then(setPreview).catch((e: unknown) => setPreviewError(e instanceof ApiError ? e.message : String(e)));
   }, [step, args]);
 
-  const pick = (next: Source) => {
-    setSource(next);
-    setStep(next?.kind === "template" ? 1 : 2);
-  };
+  const needsZone = zoneIds.length === 0;
+  const sharedZones = useZones ? snap.zones.filter((z) => zoneIds.includes(z.id) && busyWith(z, replacing?.name).length) : [];
 
   const confirm = async () => {
-    if (!source) return;
-    const result = await run(async () => {
-      let planId = source.kind === "plan" ? source.id : "";
-      let created = false;
-      if (source.kind === "template") {
-        planId = (await api.createPlan(snap.id, { template: source.id, role_map: roles, name: name.trim() || undefined })).plan_id;
-        created = true;
-      }
-      try {
-        return await api.startGrow(snap.id, {
-          plan: planId,
-          stage,
-          stage_started: started,
-          include_past_tasks: includePast,
-          night_lighting: night,
+    if (!template) return;
+    const result = await run(
+      () =>
+        api.startGrow(snap.id, {
+          ...args,
           name: name.trim() || undefined,
-          replace: replacing?.id,
-          keep_grow_start: replacing ? keepStart : undefined,
-        });
-      } catch (err) {
-        if (created) await api.deletePlan(snap.id, planId).catch(() => {});
-        throw err;
-      }
-    }, replacing ? "Grow changed" : "Grow started");
+        }),
+      replacing ? "Grow changed" : "Grow started",
+    );
     if (result) onDone(result);
   };
 
   const back = () => {
-    if (step === 2 && source?.kind === "plan") setStep(0);
-    else setStep(Math.max(0, step - 1));
+    setStep(Math.max(0, step - 1));
   };
 
   return (
@@ -136,47 +121,59 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
       </div>
 
       {step === 0 ? (
-        <div class="stack" style="max-height:50vh;overflow:auto">
-          {Object.keys(plans).length ? (
-            <>
-              <h3 class="muted">My plans</h3>
-              {Object.entries(plans).map(([id, p]) => (
-                <button class="btn" style="text-align:left" key={id} onClick={() => pick({ kind: "plan", id })}>
-                  {p.name} <span class="muted small">— {p.stages.length} stages</span>
-                </button>
-              ))}
-              <h3 class="muted">Templates</h3>
-            </>
-          ) : null}
-          {templates.map((t) => (
-            <button class="btn" style="text-align:left" key={t.id} onClick={() => pick({ kind: "template", id: t.id })}>
-              {t.name} <span class="muted small">— {t.stage_count} stages, {t.total_days} days{t.builtin ? "" : " · mine"}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      {step === 1 ? (
         <>
-          <p class="muted small">
-            Templates describe lights and a pump by role. Tick the devices that play each one; a role can drive several
-            (say, one plug for two layers). Share the pump freely between grows; give each grow its own lights.
-          </p>
-          <RoleMapper
-            roles={meta.roles}
-            devices={snap.devices}
-            value={roles}
-            onChange={setRoles}
-            note={(id) => {
-              const others = snap.devices.find((d) => d.id === id);
-              const users = others ? inUse(others).map((x) => x.grow) : [];
-              return users.length ? `also run by ${users.join(", ")}` : undefined;
-            }}
-          />
+          <div class="stack" style="max-height:34vh;overflow:auto">
+            {templates.map((t) => (
+              <button
+                class={`btn${template === t.id ? " primary" : ""}`}
+                style="text-align:left"
+                key={t.id}
+                onClick={() => setTemplate(t.id)}
+              >
+                {t.name} <span class="muted small">— {t.stage_count} stages, {t.total_days} days{t.builtin ? "" : " · mine"}</span>
+              </button>
+            ))}
+          </div>
+
+          {template && useZones ? (
+            <div class="stack" style="gap:4px" role="group" aria-label="Zones">
+              <h3>Which zone?</h3>
+              {snap.zones.map((z) => {
+                const busy = busyWith(z, replacing?.name);
+                return (
+                  <label class="check" key={z.id} style={busy.length ? "opacity:.6" : ""}>
+                    <input
+                      type="checkbox"
+                      checked={zoneIds.includes(z.id)}
+                      onChange={(e) => {
+                        const on = (e.currentTarget as HTMLInputElement).checked;
+                        setZoneIds(on ? [...zoneIds, z.id] : zoneIds.filter((x) => x !== z.id));
+                      }}
+                    />
+                    {z.name}{" "}
+                    {busy.length ? <span class="muted small">· in use by {busy.join(", ")}</span> : null}
+                    {snap.devices.some((d) => d.zone === z.id) ? null : <span class="muted small">· no lights yet</span>}
+                  </label>
+                );
+              })}
+              <span class="muted small">The pump is shared by every grow and picked up automatically.</span>
+              {sharedZones.length ? (
+                <div class="callout small">{sharedZones.map((z) => z.name).join(", ")} already runs a grow. Both grows will drive its lights, so a light is on whenever either wants it.</div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!useZones ? (
+            <div class="callout stack">
+              <strong>Set up your zones first</strong>
+              <span class="small">A zone is the set of lights one grow takes over, e.g. “Layers 1+2”. Once your lights are in zones, starting a grow is just a template and a zone.</span>
+              <div><button class="btn primary" onClick={onSetupZones}>Set up zones…</button></div>
+            </div>
+          ) : null}
         </>
       ) : null}
 
-      {step === 2 ? (
+      {step === 1 ? (
         <div class="stack">
           <Field label="Grow name" hint="Tells grows apart on tasks and entities, e.g. “Layers 1+2”">
             <input
@@ -212,20 +209,18 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
             <label class="check"><input type="checkbox" checked={keepStart} onChange={(e) => setKeepStart((e.currentTarget as HTMLInputElement).checked)} />Keep counting the grow from {shortDate(replacing.grow_started)} (it's the same plants, just a different plan). This sets when system upkeep falls due.</label>
           ) : null}
           <label class="row"><Switch label="Night lighting" checked={night} onChange={setNight} /> Night lighting (this grow's lights run 12 hours shifted)</label>
+          <hr />
+          {previewError ? <p class="error-text" role="alert">{previewError}</p> : !preview ? <p class="muted">Working it out…</p> : <Review p={preview} replacing={replacing?.name} name={name} />}
         </div>
-      ) : null}
-
-      {step === 3 ? (
-        previewError ? <p class="error-text" role="alert">{previewError}</p> : !preview ? <p class="muted">Working it out…</p> : <Review p={preview} replacing={replacing?.name} name={name} />
       ) : null}
 
       <div class="row" style="justify-content:space-between">
         <button class="btn" onClick={step === 0 ? onClose : back}>{step === 0 ? "Cancel" : "Back"}</button>
-        {step === 3 ? (
+        {step === 1 ? (
           <button class="btn primary" disabled={busy || !preview} onClick={confirm}>{replacing ? "Switch to this plan" : "Start grow"}</button>
-        ) : step > 0 ? (
-          <button class="btn primary" disabled={!source || (step === 2 && stageNames.length === 0)} onClick={() => setStep(step + 1)}>Next</button>
-        ) : <span />}
+        ) : (
+          <button class="btn primary" disabled={!template || needsZone} onClick={() => setStep(1)}>Next</button>
+        )}
       </div>
     </Dialog>
   );
@@ -233,7 +228,7 @@ export function Wizard({ snap, meta, initial, onClose, onDone }: Props) {
 
 function Review({ p, replacing, name }: { p: Preview; replacing?: string; name: string }) {
   return (
-    <div class="stack" style="max-height:55vh;overflow:auto">
+    <div class="stack">
       {replacing ? <div class="callout small">This replaces {replacing}. Its task progress is reset.</div> : null}
       <div>
         <strong>{name.trim() && name.trim() !== p.plan ? `${name.trim()} — ${p.plan}` : p.plan}</strong>
