@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0
+
+- **Fixed the to-do list filling up with duplicates.** Some lists (iCloud Reminders in particular) don't report a
+  new item straight away, so the sync didn't recognise what it had just added and added it again on every pass,
+  which could leave thousands of copies of the same few tasks, many due today. The sync now claims an item that
+  is already there instead of adding another, and waits a few passes for a new one to show up.
+- **Only upcoming tasks are mirrored to the to-do list**: those overdue or due in the next 7 days, like the
+  panel's *Overdue*, *Today* and *Next 7 days*. Later tasks are added as they come near, and open items that
+  are further out are taken off the list again.
+- **If your list already has duplicates**, clear them on the list's side (delete them, don't check them off:
+  that would complete the task). The app keeps its own tasks and puts back the upcoming ones on its next sync.
+
 ## 0.6.0
 
 - **Zones and device roles.** Give each device a role (center light, side light, pump) and put lights into

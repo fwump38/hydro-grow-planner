@@ -3,7 +3,8 @@
 The app owns the tasks; the to-do list is a view that can also check things off.
 `reconcile()` is idempotent and safe to run after every change on either side:
 
-- an open instance gets a to-do item (mapped by uid in `rt["todo_map"]`)
+- an open instance that is overdue or due within `TODO_HORIZON_DAYS` gets a to-do item (mapped by
+  uid in `rt["todo_map"]`); later ones are added as they come near
 - an item checked off in HA completes its instance, which schedules the next one of
   a repeating task (and the next pass adds that item)
 - an instance completed in the panel is checked off in HA
@@ -21,13 +22,18 @@ the panel, which is also how a repeating task is stopped.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import logging
 from typing import Protocol
 
 from .engine import GrowError, GrowSystem
 
 _LOGGER = logging.getLogger(__name__)
+
+# Tasks due further ahead than this stay off the list (matches the panel's "Next 7 days").
+TODO_HORIZON_DAYS = 7
+# Passes to wait for a just-added item to show up before adding it again.
+MAX_UNSEEN_PASSES = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +76,8 @@ class TodoSync:
         """Create the sync."""
         self.system = system
         self.port = port
+        # Instances added but not yet seen on the list -> passes waited for them.
+        self._unseen: dict[str, int] = {}
 
     @property
     def _foreign(self) -> set[str]:
@@ -127,29 +135,65 @@ class TodoSync:
             elif uid not in items:
                 del mapping[instance_id]  # deleted in HA: it is added back below
 
-        # 3. Push instances HA doesn't have yet.
+        # 2b. Only the upcoming tasks live on the list, as in the panel's "Next 7 days":
+        # open items that are still further out are taken off again (they come back
+        # when they near).
+        horizon = (system.today + timedelta(days=TODO_HORIZON_DAYS)).isoformat()
+        for instance_id, uid in list(mapping.items()):
+            task = shown.get(instance_id)
+            item = items.get(uid)
+            if task and not task["done"] and task["due"] > horizon and item and not item.completed:
+                await self.port.remove_item(uid)
+                del mapping[instance_id]
+                del items[uid]
+
+        # 3. Push upcoming instances HA doesn't have yet.
         tagged = len(system.grows) > 1
         for instance_id, task in shown.items():
-            if instance_id in mapping or task["done"]:
+            if instance_id in mapping or task["done"] or task["due"] > horizon:
                 continue
             summary = _summary(task, tagged)
+            # An item we added earlier but could not match back (some lists, e.g. iCloud, are
+            # slow to report a new item) is claimed, not added a second time.
+            taken = set(mapping.values())
+            lost = next(
+                (
+                    i
+                    for i in items.values()
+                    if i.uid not in taken
+                    and i.uid not in foreign
+                    and not i.completed
+                    and i.summary == summary
+                    and (i.due or "")[:10] == (task["due"] or "")[:10]
+                ),
+                None,
+            )
+            if lost is not None:
+                mapping[instance_id] = lost.uid
+                self._unseen.pop(instance_id, None)
+                continue
+            if self._unseen.get(instance_id, 0) in range(1, MAX_UNSEEN_PASSES + 1):
+                self._unseen[instance_id] += 1  # wait for the list to show what we added
+                continue
             before = set(items)
             await self.port.add_item(summary, task["due"], task["note"])
             items = {i.uid: i for i in await self.port.list_items()}
             # Our item is the new one; never claim an item that was already there.
+            # Lists report `due` in their own format (a date or a datetime), so compare days.
+            new = [i for i in items.values() if i.uid not in before and not i.completed]
             match = next(
                 (
                     i
-                    for i in items.values()
-                    if i.uid not in before
-                    and not i.completed
-                    and i.summary == summary
-                    and (i.due or None) == (task["due"] or None)
+                    for i in new
+                    if i.summary == summary and (i.due or "")[:10] == (task["due"] or "")[:10]
                 ),
                 None,
-            )
+            ) or next((i for i in new if i.summary == summary), None)
             if match is not None:
                 mapping[instance_id] = match.uid
+                self._unseen.pop(instance_id, None)
+            else:
+                self._unseen[instance_id] = 1
 
         # 4. Adopt items made in HA, if asked to; otherwise just note that they aren't ours.
         # Items seen while adopting is off are never imported later, so switching it on

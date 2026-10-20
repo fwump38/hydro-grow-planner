@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from itertools import count
 
-from grow_planner.todo_sync import TodoItem, TodoSync
+from grow_planner.todo_sync import TODO_HORIZON_DAYS, TodoItem, TodoSync
 
 from .conftest import Harness
 
@@ -162,3 +162,64 @@ async def test_turning_adoption_on_does_not_import_the_backlog(h: Harness) -> No
     await todo.add_item("Order nutrients", None, "")
     await sync.reconcile()
     assert any(t["title"] == "Order nutrients" for t in h.system.task_items())
+
+
+async def test_only_upcoming_tasks_are_on_the_list(h: Harness) -> None:
+    sync, todo = await setup(h)
+    horizon = (h.system.today + timedelta(days=TODO_HORIZON_DAYS)).isoformat()
+    far = [t for t in h.system.task_items() if t["due"] > horizon]
+    assert far, "the fixture should have tasks beyond the window"
+    assert all((i.due or "") <= horizon for i in todo.items.values())
+    assert len(todo.items) < len(h.system.task_items())
+
+
+async def test_tasks_are_added_as_they_come_near(h: Harness) -> None:
+    sync, todo = await setup(h)
+    on_list = set(todo.items)
+    h.clock.advance(days=60)
+    await sync.reconcile()
+    assert set(todo.items) - on_list, "tasks that came within the window should be added"
+
+
+async def test_datetime_due_from_the_list_does_not_duplicate(h: Harness) -> None:
+    class DatetimeTodo(FakeTodo):
+        async def add_item(self, summary: str, due: str | None, description: str) -> None:
+            await super().add_item(summary, f"{due}T00:00:00" if due else None, description)
+
+    todo = DatetimeTodo()
+    h.system.data["todo_entity"] = "todo.grow"
+    sync = TodoSync(h.system, todo)
+    await h.start("Leafy Greens", stage_ref=3)
+    await sync.reconcile()
+    before = len(todo.items)
+    await sync.reconcile()
+    await sync.reconcile()
+    assert len(todo.items) == before
+
+
+async def test_slow_list_does_not_duplicate(h: Harness) -> None:
+    class SlowTodo(FakeTodo):
+        """Does not report a new item until the next time the list is read."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.hidden: dict[str, TodoItem] = {}
+
+        async def list_items(self) -> list[TodoItem]:
+            shown = list(self.items.values())
+            self.items.update(self.hidden)
+            self.hidden = {}
+            return shown
+
+        async def add_item(self, summary: str, due: str | None, description: str) -> None:
+            uid = f"u{next(self._ids)}"
+            self.hidden[uid] = TodoItem(uid, summary, False, due, description)
+
+    todo = SlowTodo()
+    h.system.data["todo_entity"] = "todo.grow"
+    sync = TodoSync(h.system, todo)
+    await h.start("Leafy Greens", stage_ref=3)
+    for _ in range(5):
+        await sync.reconcile()
+    summaries = [i.summary for i in todo.items.values()]
+    assert len(summaries) == len(set(summaries))
