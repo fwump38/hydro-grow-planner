@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+- **Fixed every task being added to the to-do list twice** the first time it syncs to a new list. When the
+  sync could not see an item it had just added, it later took that item for one that was already on the list
+  and added another. It now recognises its own items, and claims one that turns up late instead of adding a copy.
+- The add-on log now says when an item was not on the list straight after it was added
+  ("was not on the list when read straight back"), to help track down why.
+- If your list already has doubled items, clear it (delete them, don't check them off) and restart the add-on;
+  the upcoming tasks are put back once each.
+
 ## 0.7.0
 
 - **Fixed the to-do list filling up with duplicates.** Some lists (iCloud Reminders in particular) don't report a

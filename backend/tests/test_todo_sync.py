@@ -223,3 +223,30 @@ async def test_slow_list_does_not_duplicate(h: Harness) -> None:
         await sync.reconcile()
     summaries = [i.summary for i in todo.items.values()]
     assert len(summaries) == len(set(summaries))
+
+
+async def test_first_pass_on_a_lagging_list_does_not_double_add(h: Harness) -> None:
+    class LaggyTodo(FakeTodo):
+        """A new item is not reported until the list has been read twice more."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.age: dict[str, int] = {}
+
+        async def list_items(self) -> list[TodoItem]:
+            for uid in self.age:
+                self.age[uid] += 1
+            return [i for i in self.items.values() if self.age.get(i.uid, 99) > 2]
+
+        async def add_item(self, summary: str, due: str | None, description: str) -> None:
+            await super().add_item(summary, due, description)
+            self.age[f"u{next(self._ids) - 1}"] = 0
+
+    todo = LaggyTodo()
+    h.system.data["todo_entity"] = "todo.grow"
+    sync = TodoSync(h.system, todo)
+    await h.start("Leafy Greens", stage_ref=3)
+    for _ in range(8):
+        await sync.reconcile()
+    summaries = [i.summary for i in todo.items.values()]
+    assert len(summaries) == len(set(summaries))

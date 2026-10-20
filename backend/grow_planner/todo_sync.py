@@ -102,8 +102,9 @@ class TodoSync:
         items = {i.uid: i for i in await self.port.list_items()}
         mapping = self._map
         foreign = self._foreign
-        if not mapping and not foreign:
-            # First look at this list: whatever is on it already is not ours.
+        if not mapping and not foreign and not self._unseen:
+            # First look at this list: whatever is on it already is not ours. (Not while we
+            # are still waiting for items we just added to show up: those are ours.)
             foreign = set(items)
         instances = {i["id"]: i for i in system.rt["instances"]}
         shown = {t["id"]: t for t in system.task_items()}
@@ -149,14 +150,13 @@ class TodoSync:
 
         # 3. Push upcoming instances HA doesn't have yet.
         tagged = len(system.grows) > 1
-        for instance_id, task in shown.items():
-            if instance_id in mapping or task["done"] or task["due"] > horizon:
-                continue
+
+        def claim(instance_id: str) -> bool:
+            """Map an instance to an unclaimed item that is already on the list."""
+            task = shown[instance_id]
             summary = _summary(task, tagged)
-            # An item we added earlier but could not match back (some lists, e.g. iCloud, are
-            # slow to report a new item) is claimed, not added a second time.
             taken = set(mapping.values())
-            lost = next(
+            found = next(
                 (
                     i
                     for i in items.values()
@@ -168,32 +168,59 @@ class TodoSync:
                 ),
                 None,
             )
-            if lost is not None:
-                mapping[instance_id] = lost.uid
-                self._unseen.pop(instance_id, None)
+            if found is None:
+                return False
+            mapping[instance_id] = found.uid
+            self._unseen.pop(instance_id, None)
+            return True
+
+        def claim_unseen() -> None:
+            # Some lists (iCloud Reminders) are slow to report a new item, so an item we
+            # added earlier can turn up while we are busy with another one.
+            for instance_id in [i for i in self._unseen if i in shown and i not in mapping]:
+                claim(instance_id)
+
+        for instance_id, task in shown.items():
+            if instance_id in mapping or task["done"] or task["due"] > horizon:
+                continue
+            if claim(instance_id):
                 continue
             if self._unseen.get(instance_id, 0) in range(1, MAX_UNSEEN_PASSES + 1):
                 self._unseen[instance_id] += 1  # wait for the list to show what we added
                 continue
+            summary = _summary(task, tagged)
             before = set(items)
             await self.port.add_item(summary, task["due"], task["note"])
             items = {i.uid: i for i in await self.port.list_items()}
+            claim_unseen()
             # Our item is the new one; never claim an item that was already there.
             # Lists report `due` in their own format (a date or a datetime), so compare days.
-            new = [i for i in items.values() if i.uid not in before and not i.completed]
+            taken = set(mapping.values())
+            new = [i for i in items.values() if i.uid not in before and i.uid not in taken]
             match = next(
                 (
                     i
                     for i in new
-                    if i.summary == summary and (i.due or "")[:10] == (task["due"] or "")[:10]
+                    if not i.completed
+                    and i.summary == summary
+                    and (i.due or "")[:10] == (task["due"] or "")[:10]
                 ),
                 None,
-            ) or next((i for i in new if i.summary == summary), None)
+            )
             if match is not None:
                 mapping[instance_id] = match.uid
                 self._unseen.pop(instance_id, None)
             else:
+                _LOGGER.warning(
+                    "Added %r (due %s) to %s but it was not on the list when read straight back "
+                    "(%d items); waiting for it to appear",
+                    summary,
+                    task["due"],
+                    system.data.get("todo_entity"),
+                    len(items),
+                )
                 self._unseen[instance_id] = 1
+        claim_unseen()
 
         # 4. Adopt items made in HA, if asked to; otherwise just note that they aren't ours.
         # Items seen while adopting is off are never imported later, so switching it on
