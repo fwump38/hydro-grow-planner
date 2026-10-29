@@ -36,6 +36,7 @@ from .core.const import (
     MODE_MANUAL,
 )
 from .core.maintenance import default_maintenance, normalize_maintenance, task_id as maint_task_id
+from .core import nutrients as nutrient_calc
 from .core.models import DeviceSchedule, Plan, Stage, Task, new_id, out_of_range
 from .core.presets import LIGHT_ROLES, PRESET_ROLES, guess_role
 from .core.progress import (
@@ -67,6 +68,12 @@ CONFIG_KEYS = {
     "todo_entity",
     "todo_adopt",
     "maintenance",
+    "capacity",
+    "volume_unit",
+    "temperature_unit",
+    "weight_unit",
+    "ec_stale_hours",
+    "nutrients",
 }
 # What describes one stage run; saved to history when a stage is left.
 RUN_KEYS = ("stage_id", "stage_started", "stage_run", "instances")
@@ -79,6 +86,14 @@ LEGACY_GROW_KEYS = (
     "stage_run",
     "stage_check_notified",
 )
+
+
+def _litres_per(volume_unit: str) -> float:
+    return units.LITRES_PER_GALLON if volume_unit == "gal" else 1.0
+
+
+def _grams_per(weight_unit: str) -> float:
+    return units.GRAMS_PER_OUNCE if weight_unit == "oz" else 1.0
 
 
 class GrowError(Exception):
@@ -223,6 +238,13 @@ def new_system_data(system_id: str, name: str) -> dict[str, Any]:
         "todo_entity": None,
         "todo_adopt": False,
         "maintenance": default_maintenance(),
+        # Tank size in litres. Units are None to follow Home Assistant's unit system.
+        "capacity_l": None,
+        "volume_unit": None,
+        "temperature_unit": None,
+        "weight_unit": None,
+        "ec_stale_hours": nutrient_calc.DEFAULT_STALE_HOURS,
+        "nutrients": nutrient_calc.default_nutrients(),
         "runtime": {},
     }
 
@@ -254,6 +276,14 @@ class GrowSystem:
         data.setdefault("maintenance", default_maintenance())
         data.setdefault("todo_adopt", False)
         data.setdefault("zones", [])
+        data.setdefault("capacity_l", None)
+        data.setdefault("volume_unit", None)
+        data.setdefault("temperature_unit", None)
+        data.setdefault("weight_unit", None)
+        # The units Home Assistant is set to; the app shares one dict with every system.
+        self.ha_units: dict[str, str] = {}
+        data.setdefault("ec_stale_hours", nutrient_calc.DEFAULT_STALE_HOURS)
+        data.setdefault("nutrients", nutrient_calc.default_nutrients())
         for device in data.get("devices", []):
             device.setdefault("role", guess_role(device["entity_id"], device["name"]))
             device.setdefault("zone", None)
@@ -462,6 +492,38 @@ class GrowSystem:
             if problems:
                 raise GrowError(f"{problems[0]['message']} ({problems[0]['path']})")
             clean["maintenance"] = tasks
+        for key, allowed in (
+            ("volume_unit", units.VOLUME_UNITS),
+            ("temperature_unit", units.TEMPERATURE_UNITS),
+            ("weight_unit", units.WEIGHT_UNITS),
+        ):
+            if key in fields:
+                value = fields[key] or None
+                if value is not None and value not in allowed:
+                    raise GrowError(f"Unknown unit: {value}")
+                clean[key] = value
+        if "capacity" in fields:
+            # Entered in the volume unit that will apply once this change is saved.
+            raw = fields["capacity"]
+            capacity = None if raw in (None, "") else float(raw)
+            if capacity is not None and not 0 < capacity <= 100000:
+                raise GrowError("The tank capacity must be above 0")
+            unit = self._resolve("volume_unit", clean.get("volume_unit", self.data["volume_unit"]))
+            clean["capacity_l"] = (
+                None if capacity is None else capacity * _litres_per(unit)
+            )
+        if "ec_stale_hours" in fields:
+            hours = int(fields["ec_stale_hours"])
+            if not 1 <= hours <= 24 * 60:
+                raise GrowError("An EC reading goes stale after 1-1440 hours")
+            clean["ec_stale_hours"] = hours
+        if "nutrients" in fields:
+            nutrients, problems = nutrient_calc.normalize_nutrients(
+                fields["nutrients"], self._make_id
+            )
+            if problems:
+                raise GrowError(f"{problems[0]['message']} ({problems[0]['path']})")
+            clean["nutrients"] = nutrients
         if "sensors" in fields:
             sensors = {m: (fields["sensors"].get(m) or None) for m in METRICS}
             clean["sensors"] = sensors
@@ -646,12 +708,40 @@ class GrowSystem:
         ec = self.ec
         return units.from_canonical(ec, self.ec_unit) if ec is not None else None
 
+    def _resolve(self, key: str, override: str | None) -> str:
+        """Return a display unit: the setting if it has one, else Home Assistant's, else a default."""
+        if override:
+            return override
+        ha_key = {"volume_unit": "volume", "temperature_unit": "temperature", "weight_unit": "weight"}
+        if found := self.ha_units.get(ha_key[key]):
+            return found
+        if key == "temperature_unit":
+            # Without either, use the oldest running plan's unit.
+            grows = self.active_grows
+            plan = grows[0].plan if grows else None
+            return plan.temp_unit if plan else "°C"
+        return {"volume_unit": "gal", "weight_unit": "g"}[key]
+
     @property
     def temperature_unit(self) -> str:
-        """Return the unit temperatures are shown in (the oldest running plan's)."""
-        grows = self.active_grows
-        plan = grows[0].plan if grows else None
-        return plan.temp_unit if plan else "°C"
+        """Return the unit temperatures are shown in."""
+        return self._resolve("temperature_unit", self.data["temperature_unit"])
+
+    @property
+    def volume_unit(self) -> str:
+        """Return the unit water volumes are shown in."""
+        return self._resolve("volume_unit", self.data["volume_unit"])
+
+    @property
+    def weight_unit(self) -> str:
+        """Return the unit nutrient weights are shown in."""
+        return self._resolve("weight_unit", self.data["weight_unit"])
+
+    @property
+    def capacity(self) -> float | None:
+        """Return the tank capacity in `volume_unit`."""
+        litres = self.data["capacity_l"]
+        return None if litres is None else round(litres / _litres_per(self.volume_unit), 2)
 
     @property
     def temperature(self) -> float | None:
@@ -1212,6 +1302,7 @@ class GrowSystem:
             self.rt["ph"] = ph
         if ec_canonical is not None:
             self.rt["ec"] = ec_canonical
+            self.rt["ec_at"] = self.now.isoformat()
         self.rt["last_reading"] = self.now.isoformat()
         self.rt["reading_overdue_notified"] = False
         parts = []
@@ -1224,6 +1315,119 @@ class GrowSystem:
             self.readings.add(self.id, self.now, ph, ec_canonical)
         self._changed()
         await self.evaluate_alerts()
+
+    @property
+    def ec_updated(self) -> datetime | None:
+        """Return when the EC reading was taken (None when unknown)."""
+        if self.has_sensor("ec"):
+            state = self.states.get(self._sensor_entity("ec") or "")
+            return state.updated if state else None
+        stamp = self.rt.get("ec_at") or self.rt.get("last_reading")
+        return datetime.fromisoformat(stamp) if stamp else None
+
+    @property
+    def ec_stale(self) -> bool | None:
+        """Return whether the EC reading is too old to dose by; None when there is none.
+
+        A sensor that doesn't say when it last reported is trusted.
+        """
+        if self.ec is None:
+            return None
+        updated = self.ec_updated
+        if updated is None:
+            return not self.has_sensor("ec")
+        return self.now - updated > timedelta(hours=self.data["ec_stale_hours"])
+
+    def nutrient_dose(
+        self, added: float, ec: float | None = None, target_ec: float | None = None
+    ) -> dict[str, Any]:
+        """Work out nutrients for topping the tank up with `added` water.
+
+        `added` is in the system's volume unit; `ec` and `target_ec` are in the EC display
+        unit. EC defaults to the current reading and the target to the middle of the
+        running grows' combined EC range. Raises GrowError when something is missing.
+        """
+        capacity_l, unit, weight = self.data["capacity_l"], self.volume_unit, self.weight_unit
+        if not capacity_l:
+            raise GrowError("Set the tank capacity in Settings first")
+        grows = [g for g in self.active_grows if g.stage is not None]
+        if not grows:
+            raise GrowError("Nothing is growing, so there is no stage to dose for")
+        line = nutrient_calc.active_line(self.data["nutrients"])
+        low, high, conflict = self._combined_range("ec")
+        columns, stages = [], []
+        for grow in grows:
+            stage = grow.stage
+            stage_low, stage_high = grow.range_for("ec")
+            column = nutrient_calc.column_for(
+                stage.stage_type, nutrient_calc.target_ec(stage_low, stage_high), line
+            )
+            columns.append(column)
+            stages.append({"grow": grow.name, "stage": stage.name, "column": column["name"]})
+        target = (
+            units.to_canonical(target_ec, self.ec_unit)
+            if target_ec is not None
+            else nutrient_calc.target_ec(low, high)
+        )
+        if target is None:
+            raise GrowError("The running grows have no EC range. Enter a target EC.")
+        current = units.to_canonical(ec, self.ec_unit) if ec is not None else self.ec
+        to_l = _litres_per(unit)
+        try:
+            result = nutrient_calc.calculate(
+                line, columns, capacity_l, added * to_l, current, target
+            )
+        except ValueError as err:
+            raise GrowError(str(err)) from None
+
+        def show(mscm: float) -> float:
+            return units.from_canonical(mscm, self.ec_unit)
+
+        warnings = []
+        if conflict:
+            warnings.append(
+                "The running grows' EC ranges don't overlap, so the oldest grow's range was used."
+            )
+        if target_ec is not None and low is not None and high is not None:
+            if not low - 1e-9 <= target <= high + 1e-9:
+                warnings.append("That target is outside the running grows' EC range.")
+        if result["concentrated"] and result["needs_nutrients"]:
+            warnings.append(
+                "That is stronger than the feeding chart for plain water because the tank "
+                "is below target. Add the total amount to the tank, not per gallon of new water."
+            )
+        if not result["needs_nutrients"]:
+            warnings.append("The tank will already be at or above the target, so add no nutrients.")
+        return {
+            "line": line["name"],
+            "volume_unit": unit,
+            "capacity": self.capacity,
+            "added": added,
+            "weight_unit": weight,
+            "current_volume": round(result["existing_l"] / to_l, 2),
+            "current_ec": show(current) if current is not None else None,
+            "diluted_ec": show(result["diluted_ec"]),
+            "target_ec": show(target),
+            "ec_unit": self.ec_unit,
+            "needs_nutrients": result["needs_nutrients"],
+            "stages": stages,
+            "products": [
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "short": p["short"],
+                    "ml": round(p["ml"], 1),
+                    "weight": round(p["g"] / _grams_per(weight), 1 if weight == "g" else 2),
+                    "ml_per_unit": round(p["ml_per_gal" if unit == "gal" else "ml_per_l"], 2),
+                    "weight_per_unit": round(
+                        p["g_per_gal" if unit == "gal" else "g_per_l"] / _grams_per(weight),
+                        2 if weight == "g" else 3,
+                    ),
+                }
+                for p in result["products"]
+            ],
+            "warnings": warnings,
+        }
 
     async def water_checked(self) -> None:
         """Note that the water was checked without changing any value."""

@@ -21,6 +21,7 @@ from .core import units
 from .core.const import EC_UNITS, HARVEST_STYLES, SCHEDULE_MODES, STAGE_TYPES, TASK_TYPES
 from .core.events_doc import EVENTS, example_payload
 from .core.models import new_id
+from .core.nutrients import builtin_lines
 from .core.presets import (
     PRESET_ROLES,
     build_from_template,
@@ -109,6 +110,7 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         return _json(
             {
                 "ec_units": EC_UNITS,
+                "builtin_nutrients": builtin_lines(),
                 "harvest_styles": HARVEST_STYLES,
                 "stage_types": STAGE_TYPES,
                 "task_types": TASK_TYPES,
@@ -196,8 +198,14 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
             "todo_entity",
             "todo_adopt",
             "maintenance",
+            "volume_unit",
+            "temperature_unit",
+            "weight_unit",
+            "ec_stale_hours",
+            "nutrients",
         )
-        return _json({k: d[k] for k in keys})
+        system = _system(request)
+        return _json({**{k: d[k] for k in keys}, "capacity": system.capacity})
 
     @r.patch("/api/systems/{sid}/config")
     async def patch_config(request: web.Request) -> web.Response:
@@ -233,6 +241,18 @@ def routes(app: App) -> web.RouteTableDef:  # noqa: C901 - one flat list of smal
         ec = float(body["ec"]) if body.get("ec") not in (None, "") else None
         await system.record_reading(ph=ph, ec=ec)
         return _view(system)
+
+    @r.post("/api/systems/{sid}/nutrients/calculate")
+    async def calculate_nutrients(request: web.Request) -> web.Response:
+        body = await _body(request)
+
+        def number(key: str) -> float | None:
+            return float(body[key]) if body.get(key) not in (None, "") else None
+
+        added = number("added")
+        if added is None:
+            raise GrowError("Enter how much water you are adding")
+        return _json(_system(request).nutrient_dose(added, number("ec"), number("target_ec")))
 
     @r.post("/api/systems/{sid}/water-checked")
     async def water_checked(request: web.Request) -> web.Response:

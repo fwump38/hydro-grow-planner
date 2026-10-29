@@ -4,18 +4,19 @@ import { api } from "./api";
 import { PlanEditor } from "./PlanEditor";
 import { describe, profile } from "./schedule";
 import type { Meta, Plan, Schedule, Stage, Task, Template, TemplateCard } from "./types";
-import { fromCanonical } from "./units";
+import { fromCanonical, tempRangeText } from "./units";
 import { Badge, ConfirmButton, useAction } from "./ui";
 
 interface Props {
   meta: Meta;
   ecUnit: string;
+  tempUnit: string;
   onUse: (templateId: string) => void;
 }
 
 type View = { kind: "list" } | { kind: "detail"; id: string } | { kind: "edit"; id: string };
 
-export function Templates({ meta, ecUnit, onUse }: Props) {
+export function Templates({ meta, ecUnit, tempUnit, onUse }: Props) {
   const [view, setView] = useState<View>({ kind: "list" });
   const [cards, setCards] = useState<TemplateCard[] | null>(null);
   const { run } = useAction();
@@ -30,6 +31,7 @@ export function Templates({ meta, ecUnit, onUse }: Props) {
         id={view.id}
         meta={meta}
         ecUnit={ecUnit}
+        tempUnit={tempUnit}
         onBack={() => { load(); setView({ kind: "list" }); }}
         onUse={onUse}
         onEdit={(id) => setView({ kind: "edit", id })}
@@ -38,7 +40,7 @@ export function Templates({ meta, ecUnit, onUse }: Props) {
     );
   }
   if (view.kind === "edit") {
-    return <Edit id={view.id} meta={meta} ecUnit={ecUnit} onBack={() => setView({ kind: "detail", id: view.id })} />;
+    return <Edit id={view.id} meta={meta} ecUnit={ecUnit} tempUnit={tempUnit} onBack={() => setView({ kind: "detail", id: view.id })} />;
   }
 
   const importFile = async (file: File) => {
@@ -69,16 +71,16 @@ export function Templates({ meta, ecUnit, onUse }: Props) {
       {mine.length ? (
         <>
           <h3 class="muted">My templates</h3>
-          <div class="grid">{mine.map((c) => <Card key={c.id} c={c} onOpen={() => setView({ kind: "detail", id: c.id })} onUse={() => onUse(c.id)} />)}</div>
+          <div class="grid">{mine.map((c) => <Card key={c.id} c={c} tempUnit={tempUnit} onOpen={() => setView({ kind: "detail", id: c.id })} onUse={() => onUse(c.id)} />)}</div>
           <h3 class="muted">Built-in</h3>
         </>
       ) : null}
-      <div class="grid">{builtin.map((c) => <Card key={c.id} c={c} onOpen={() => setView({ kind: "detail", id: c.id })} onUse={() => onUse(c.id)} />)}</div>
+      <div class="grid">{builtin.map((c) => <Card key={c.id} c={c} tempUnit={tempUnit} onOpen={() => setView({ kind: "detail", id: c.id })} onUse={() => onUse(c.id)} />)}</div>
     </div>
   );
 }
 
-function Card({ c, onOpen, onUse }: { c: TemplateCard; onOpen: () => void; onUse: () => void }) {
+function Card({ c, tempUnit, onOpen, onUse }: { c: TemplateCard; tempUnit: string; onOpen: () => void; onUse: () => void }) {
   return (
     <section class="card">
       <div class="row between"><h3>{c.name}</h3>{c.builtin ? null : <Badge kind="accent">mine</Badge>}</div>
@@ -88,7 +90,7 @@ function Card({ c, onOpen, onUse }: { c: TemplateCard; onOpen: () => void; onUse
       </div>
       <div class="small muted">
         {c.ph ? <div>pH {c.ph}</div> : null}
-        {c.temperature ? <div>Temperature {c.temperature} {c.temp_unit}</div> : null}
+        {c.temp_min !== null || c.temp_max !== null ? <div>Temperature {tempRangeText(c.temp_min, c.temp_max, c.temp_unit, tempUnit)}</div> : null}
         {c.humidity ? <div>Humidity {c.humidity} %</div> : null}
       </div>
       <div class="row wrap">
@@ -146,7 +148,7 @@ function StageBlock({ stage, index, roles, ecUnit }: { stage: Stage; index: numb
   );
 }
 
-function Detail(props: { id: string; meta: Meta; ecUnit: string; onBack: () => void; onUse: (id: string) => void; onEdit: (id: string) => void }) {
+function Detail(props: { id: string; meta: Meta; ecUnit: string; tempUnit: string; onBack: () => void; onUse: (id: string) => void; onEdit: (id: string) => void }) {
   const [tpl, setTpl] = useState<Template | null>(null);
   const { run } = useAction();
   useEffect(() => {
@@ -166,7 +168,7 @@ function Detail(props: { id: string; meta: Meta; ecUnit: string; onBack: () => v
   };
   const ranges = [
     tpl.ph_min !== null && `pH ${tpl.ph_min}–${tpl.ph_max}`,
-    tpl.temp_min !== null && `${tpl.temp_min}–${tpl.temp_max} ${tpl.temp_unit}`,
+    tpl.temp_min !== null && `${tempRangeText(tpl.temp_min, tpl.temp_max, tpl.temp_unit, props.tempUnit)}`,
     tpl.humidity_min !== null && `${tpl.humidity_min}–${tpl.humidity_max} % humidity`,
     tpl.harvest_style === "continuous" && "harvested a little at a time",
   ].filter(Boolean);
@@ -190,7 +192,7 @@ function Detail(props: { id: string; meta: Meta; ecUnit: string; onBack: () => v
   );
 }
 
-function Edit({ id, meta, ecUnit, onBack }: { id: string; meta: Meta; ecUnit: string; onBack: () => void }) {
+function Edit({ id, meta, ecUnit, tempUnit, onBack }: { id: string; meta: Meta; ecUnit: string; tempUnit: string; onBack: () => void }) {
   const [tpl, setTpl] = useState<Template | null>(null);
   useEffect(() => {
     api.template(id).then(setTpl);
@@ -204,6 +206,7 @@ function Edit({ id, meta, ecUnit, onBack }: { id: string; meta: Meta; ecUnit: st
         initial={plan as Plan}
         slots={Object.entries(meta.roles).map(([key, label]) => ({ key, label }))}
         ecUnit={ecUnit}
+        tempUnit={tempUnit}
         stageTypes={meta.stage_types}
         taskTypes={meta.task_types}
         hint="schedules are for roles; you pick the devices when you use the template"

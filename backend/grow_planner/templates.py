@@ -28,6 +28,8 @@ def summarize(template_id: str, template: dict[str, Any]) -> dict[str, Any]:
         "stages": [{"name": s["name"], "days": s["days"], "type": s["stage_type"]} for s in stages],
         "ph": format_range(template.get("ph_min"), template.get("ph_max")),
         "temperature": format_range(template.get("temp_min"), template.get("temp_max")),
+        "temp_min": template.get("temp_min"),
+        "temp_max": template.get("temp_max"),
         "temp_unit": unit,
         "humidity": format_range(template.get("humidity_min"), template.get("humidity_max")),
         "harvest_style": template.get("harvest_style", "once"),

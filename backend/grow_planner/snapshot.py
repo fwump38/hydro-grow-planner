@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .core import units
+from .core import nutrients as nutrient_calc, units
 from .core.models import format_range
 from .core.progress import days_remaining, expected_end, progress_percent
 from .core.schedule import day_profile, describe
@@ -175,6 +175,21 @@ def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
         "ec_unit": ec_unit,
         "ec_range": [ec_low, ec_high],
         "last_reading": last.isoformat() if last else None,
+        # The units in use, and what Home Assistant is set to (the default for each).
+        "units": {
+            "temperature": system.temperature_unit,
+            "volume": system.volume_unit,
+            "weight": system.weight_unit,
+            "ha": dict(system.ha_units),
+        },
+        "reservoir": {
+            "capacity": system.capacity,
+            "volume_unit": system.volume_unit,
+            "ec_updated": system.ec_updated.isoformat() if system.ec_updated else None,
+            "ec_stale": system.ec_stale,
+            "stale_hours": system.data["ec_stale_hours"],
+            "nutrient_line": nutrient_calc.active_line(system.data["nutrients"])["name"],
+        },
         "reading_overdue": system.reading_overdue,
         "tasks": tasks,
         "tasks_due": sum(1 for t in tasks if not t["done"] and t["due"] <= now.date().isoformat()),

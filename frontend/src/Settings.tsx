@@ -5,6 +5,7 @@ import { setDirty } from "./guard";
 import { dayLabel } from "./format";
 import type { EntityRow, Meta, Metric, Snapshot, SystemConfig, SystemRow } from "./types";
 import { ConfirmButton, Field, NumberInput, useAction } from "./ui";
+import { NutrientSettings } from "./Nutrients";
 import { DevicesEditor, EntityPicker, ZonesEditor } from "./SetupParts";
 
 interface Props {
@@ -26,6 +27,47 @@ const SENSORS: [Metric, string, string[]][] = [
   ["temperature", "Room temperature sensor", ["sensor"]],
   ["humidity", "Room humidity sensor", ["sensor"]],
 ];
+
+const LITRES_PER_GALLON = 3.785411784;
+
+function volumeUnit(draft: SystemConfig, snap: Snapshot): "gal" | "L" {
+  return draft.volume_unit ?? (snap.units.ha.volume as "gal" | "L" | undefined) ?? "gal";
+}
+
+/** Each unit follows Home Assistant's unit system unless you pick one here. */
+function UnitsSettings({ snap, draft, edit }: { snap: Snapshot; draft: SystemConfig; edit: (m: (c: SystemConfig) => void) => void }) {
+  const ha = snap.units.ha;
+  const follow = (shown?: string) => (shown ? `Follow Home Assistant (${shown})` : "Follow Home Assistant");
+  const pick = (value: string | null, onChange: (v: string | null) => void, shown: string | undefined, options: [string, string][], label: string) => (
+    <Field label={label}>
+      <select value={value ?? ""} onChange={(e) => onChange((e.currentTarget as HTMLSelectElement).value || null)}>
+        <option value="">{follow(shown)}</option>
+        {options.map(([v, text]) => <option value={v} key={v}>{text}</option>)}
+      </select>
+    </Field>
+  );
+  return (
+    <section class="card">
+      <h2>Units</h2>
+      <p class="muted small">
+        Temperatures, water volumes and weights follow the unit system set in Home Assistant (metric or US customary). Pick one here only to override it for this system. EC has its own unit under Water readings.
+      </p>
+      <div class="grid">
+        {pick(draft.temperature_unit, (v) => edit((c) => (c.temperature_unit = v as "°C" | "°F" | null)), ha.temperature, [["°C", "°C"], ["°F", "°F"]], "Temperature")}
+        {pick(draft.volume_unit, (v) => edit((c) => {
+          // Keep the same tank: re-express the capacity in the new unit.
+          const before = volumeUnit(c, snap);
+          c.volume_unit = v as "gal" | "L" | null;
+          const after = volumeUnit(c, snap);
+          if (c.capacity !== null && before !== after) {
+            c.capacity = Math.round(c.capacity * (before === "gal" ? LITRES_PER_GALLON : 1 / LITRES_PER_GALLON) * 100) / 100;
+          }
+        }), ha.volume, [["gal", "Gallons"], ["L", "Litres"]], "Water volume")}
+        {pick(draft.weight_unit, (v) => edit((c) => (c.weight_unit = v as "g" | "oz" | null)), ha.weight, [["g", "Grams"], ["oz", "Ounces"]], "Nutrient weight")}
+      </div>
+    </section>
+  );
+}
 
 export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged, onSetup }: Props) {
   const [saved, setSaved] = useState<SystemConfig | null>(null);
@@ -131,6 +173,10 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged, onS
         </div>
         {unitChanged ? <div class="callout small">Changing the EC unit republishes the Home Assistant EC entities in the new unit. History recorded before the change stays in the old unit.</div> : null}
       </section>
+
+      <UnitsSettings snap={snap} draft={draft} edit={edit} />
+
+      <NutrientSettings draft={draft} edit={edit} meta={meta} volume={volumeUnit(draft, snap)} />
 
       <section class="card">
         <h2>Tasks &amp; reminders</h2>

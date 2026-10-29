@@ -107,6 +107,55 @@ export interface ZoneView {
   busy_by: string[];
 }
 
+/** A nutrient brand's products and dose chart. Doses are ml per US gallon of water. */
+export interface NutrientProduct {
+  id: string;
+  name: string;
+  short: string;
+  /** g/ml, to show a volume as a weight. */
+  density: number;
+}
+
+export interface NutrientColumn {
+  id: string;
+  name: string;
+  /** The EC (mS/cm) this column's mix gives in plain water. */
+  ec: number;
+  /** Plan stage types this column feeds. */
+  stage_types: string[];
+  doses: Record<string, number>;
+}
+
+export interface NutrientLine {
+  id: string;
+  name: string;
+  builtin?: boolean;
+  products: NutrientProduct[];
+  stages: NutrientColumn[];
+}
+
+export interface NutrientSettings {
+  active: string;
+  custom: NutrientLine[];
+}
+
+export interface DoseResult {
+  line: string;
+  volume_unit: string;
+  capacity: number;
+  added: number;
+  current_volume: number;
+  current_ec: number | null;
+  diluted_ec: number;
+  target_ec: number;
+  ec_unit: string;
+  needs_nutrients: boolean;
+  stages: { grow: string; stage: string; column: string }[];
+  weight_unit: string;
+  products: { id: string; name: string; short: string; ml: number; weight: number; ml_per_unit: number; weight_per_unit: number }[];
+  warnings: string[];
+}
+
 export interface Snapshot {
   id: string;
   name: string;
@@ -122,6 +171,22 @@ export interface Snapshot {
   metrics: Record<Metric, MetricView>;
   ec_unit: string;
   last_reading: string | null;
+  /** The units in use. `ha` is what Home Assistant is set to, the default for each. */
+  units: {
+    temperature: string;
+    volume: "gal" | "L";
+    weight: "g" | "oz";
+    ha: { temperature?: string; volume?: string; weight?: string };
+  };
+  reservoir: {
+    capacity: number | null;
+    volume_unit: "gal" | "L";
+    /** When the EC reading was taken; null when unknown. */
+    ec_updated: string | null;
+    ec_stale: boolean | null;
+    stale_hours: number;
+    nutrient_line: string;
+  };
   reading_overdue: boolean | null;
   tasks: TaskView[];
   tasks_due: number;
@@ -160,6 +225,14 @@ export interface SystemConfig {
   todo_entity: string | null;
   todo_adopt: boolean;
   maintenance: MaintenanceTask[];
+  /** In the volume unit currently in use (Home Assistant's unless overridden). */
+  capacity: number | null;
+  /** null follows Home Assistant. */
+  volume_unit: "gal" | "L" | null;
+  temperature_unit: "°C" | "°F" | null;
+  weight_unit: "g" | "oz" | null;
+  ec_stale_hours: number;
+  nutrients: NutrientSettings;
 }
 
 export interface Schedule {
@@ -216,6 +289,8 @@ export interface TemplateCard {
   stages: { name: string; days: number; type: string }[];
   ph: string | null;
   temperature: string | null;
+  temp_min: number | null;
+  temp_max: number | null;
   temp_unit: string | null;
   humidity: string | null;
   ec: string | null;
@@ -254,6 +329,7 @@ export interface Preview {
 
 export interface Meta {
   ec_units: string[];
+  builtin_nutrients: NutrientLine[];
   harvest_styles: HarvestStyle[];
   stage_types: string[];
   task_types: string[];

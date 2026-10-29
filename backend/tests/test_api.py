@@ -399,3 +399,18 @@ def test_legacy_devices_get_a_guessed_role() -> None:
     assert guess_role("switch.x", "Side light") == "side_lights"
     assert guess_role("switch.water_pump", "Pump") == "water_pump"
     assert guess_role("switch.x", "Fan") == ""
+
+
+async def test_nutrient_calculator_through_the_api(api) -> None:
+    await post(api, f"{api.base}/grows", {**leafy_body(api), "stage": 2})
+    body = {"added": 3.4}
+    assert (await api.post(f"{api.base}/nutrients/calculate", json=body)).status == 400  # no capacity
+    await api.patch(f"{api.base}/config", json={"capacity": 10, "volume_unit": "gal"})
+    assert (await api.post(f"{api.base}/nutrients/calculate", json=body)).status == 400  # no EC
+    await post(api, f"{api.base}/readings", {"ec": 1.0})
+    result = await post(api, f"{api.base}/nutrients/calculate", body)
+    assert result["line"] == "Elfsys Plant Mana" and len(result["products"]) == 4
+    snap = await (await api.get(api.base)).json()
+    assert snap["reservoir"]["capacity"] == 10 and snap["reservoir"]["ec_stale"] is False
+    meta = await (await api.get("/api/meta")).json()
+    assert meta["builtin_nutrients"][0]["id"] == "builtin:plant_mana"

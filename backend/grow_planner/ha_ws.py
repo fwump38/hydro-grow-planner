@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 import logging
 from typing import Any
 
@@ -30,8 +31,16 @@ def _entity_state(raw: dict[str, Any] | None) -> EntityState | None:
     if not raw:
         return None
     attributes = raw.get("attributes") or {}
+    stamp = raw.get("last_reported") or raw.get("last_updated")
+    try:
+        updated = datetime.fromisoformat(stamp) if stamp else None
+    except ValueError:
+        updated = None
     return EntityState(
-        raw["state"], attributes.get("unit_of_measurement"), attributes.get("friendly_name")
+        raw["state"],
+        attributes.get("unit_of_measurement"),
+        attributes.get("friendly_name"),
+        updated,
     )
 
 
@@ -95,6 +104,11 @@ class HAClient:
     async def get_states(self) -> list[dict[str, Any]]:
         """Return every entity state."""
         return await self.command({"type": "get_states"})
+
+    async def get_unit_system(self) -> dict[str, str]:
+        """Return Home Assistant's unit system (temperature, volume, mass…)."""
+        config = await self.command({"type": "get_config"})
+        return config.get("unit_system") or {}
 
     async def subscribe(
         self, payload: dict[str, Any], callback: Callable[[dict[str, Any]], None]

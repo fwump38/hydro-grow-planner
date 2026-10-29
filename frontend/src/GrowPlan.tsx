@@ -36,6 +36,7 @@ export function GrowPlan({ snap, meta, growId, onBack }: Props) {
         initial={plan}
         slots={snap.devices.map((d) => ({ key: d.id, label: d.name }))}
         ecUnit={snap.ec_unit}
+        tempUnit={snap.units.temperature}
         stageTypes={meta.stage_types}
         taskTypes={meta.task_types}
         hint="saved changes apply to this grow right away"

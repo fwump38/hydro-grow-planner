@@ -57,3 +57,35 @@ def detect_unit(unit_of_measurement: str | None) -> str | None:
 def is_valid_unit(unit: str) -> bool:
     """Return whether `unit` is a supported EC unit."""
     return unit in EC_UNITS
+
+
+# -- Home Assistant's unit system -----------------------------------------------------------------
+
+TEMPERATURE_UNITS = ("°C", "°F")
+VOLUME_UNITS = ("gal", "L")
+WEIGHT_UNITS = ("g", "oz")
+LITRES_PER_GALLON = 3.785411784
+GRAMS_PER_OUNCE = 28.349523125
+
+
+def from_ha_unit_system(raw: dict[str, str] | None) -> dict[str, str]:
+    """Reduce Home Assistant's `unit_system` to the units this app uses.
+
+    Metric (°C, litres, grams) and US customary (°F, gallons, ounces) are the two systems
+    HA knows; anything unrecognised is left out so the app falls back to its own default.
+    """
+    raw = raw or {}
+    found: dict[str, str] = {}
+    if raw.get("temperature") in TEMPERATURE_UNITS:
+        found["temperature"] = raw["temperature"]
+    volume = str(raw.get("volume") or "")
+    if volume in ("gal", "fl. oz"):
+        found["volume"] = "gal"
+    elif volume in ("L", "mL"):
+        found["volume"] = "L"
+    mass = str(raw.get("mass") or "")
+    if mass in ("oz", "lb"):
+        found["weight"] = "oz"
+    elif mass in ("g", "kg"):
+        found["weight"] = "g"
+    return found

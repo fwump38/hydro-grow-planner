@@ -37,6 +37,10 @@ class FakeConnection(FakeHA):
         super().__init__()
         self.lists: dict[str, FakeTodo] = {}
         self.subscriptions: list[dict[str, Any]] = []
+        self.unit_system: dict[str, str] = {}
+
+    async def get_unit_system(self) -> dict[str, str]:
+        return self.unit_system
 
     def todo(self, entity_id: str) -> FakeTodo:
         return self.lists.setdefault(entity_id, FakeTodo())
@@ -244,3 +248,14 @@ def test_old_plans_nobody_runs_become_templates(app: App) -> None:
     [template] = app.store.templates.values()
     assert template["name"] == "Mine"
     assert set(template["stages"][2]["schedules"]) == {"water_pump"}  # the pump's role was guessed
+
+
+async def test_app_reads_and_refreshes_the_home_assistant_units(app) -> None:
+    system = configure(app)
+    app.ha.unit_system = {"temperature": "°F", "volume": "gal", "mass": "oz"}
+    await app.on_ha_connected()
+    assert system.temperature_unit == "°F" and system.weight_unit == "oz"
+    assert any(s["event_type"] == "core_config_updated" for s in app.ha.subscriptions)
+    app.ha.unit_system = {"temperature": "°C", "volume": "L", "mass": "g"}
+    await app.refresh_units()
+    assert system.temperature_unit == "°C" and system.volume_unit == "L"

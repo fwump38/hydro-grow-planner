@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { profile } from "./schedule";
-import { fromCanonical, toCanonical } from "./units";
+import { convertTemp, fromCanonical, planInUnit, tempRangeText, toCanonical } from "./units";
 
 describe("EC units", () => {
   it("shows mS/cm targets in the chosen unit", () => {
@@ -37,5 +37,20 @@ describe("schedule profile (matches the backend)", () => {
     expect(pump[0]).toEqual([0, 15]);
     expect(pump[1]).toEqual([180, 195]);
     expect(profile({ mode: "interval", interval_on: 0, interval_every: 600 })).toEqual([]);
+  });
+});
+
+describe("temperature", () => {
+  it("converts between units and leaves matching units alone", () => {
+    expect(convertTemp(20, "°C", "°F")).toBe(68);
+    expect(convertTemp(68, "°F", "°C")).toBe(20);
+    expect(convertTemp(20, "°C", "°C")).toBe(20);
+    expect(convertTemp(null, "°C", "°F")).toBeNull();
+  });
+  it("re-expresses a plan's range and formats it", () => {
+    const plan = planInUnit({ temp_min: 18, temp_max: 24, temp_unit: "°C" }, "°F");
+    expect(plan).toEqual({ temp_min: 64.4, temp_max: 75.2, temp_unit: "°F" });
+    expect(tempRangeText(18, 24, "°C", "°F")).toBe("64.4–75.2 °F");
+    expect(tempRangeText(null, null, "°C", "°F")).toBeNull();
   });
 });

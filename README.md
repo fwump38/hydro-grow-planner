@@ -145,6 +145,36 @@ panel or in Home Assistant; both work. Tasks you add yourself can repeat too.
 Stages never advance on their own. When a stage reaches its planned length you get a "ready to
 move on?" prompt and a task; a person decides.
 
+### Units
+
+Temperatures, water volumes and nutrient weights follow the **unit system set in Home Assistant**: metric
+(°C, litres, grams) or US customary (°F, gallons, ounces). The app reads it when it connects and picks up a
+change without a restart. **Settings → Units** can override any of the three for one system, for example litres
+in an otherwise US customary home. EC has its own unit (below). Plans and templates keep the temperature unit
+they were written in, and are shown, edited and saved in the unit in use. The tank capacity is kept in litres,
+so changing units never changes the tank.
+
+### Adding water and nutrients
+
+**Settings → Tank & nutrients** holds the system's **total water capacity** (in gallons or litres, following the Units setting above), how old an EC
+reading may be before the calculator asks for a fresh one (24 h by default), and which **nutrient line** to use.
+
+**Overview → Add water & nutrients** works out what to add when you top up the tank. Enter how much water you
+are adding; the tank is assumed to be topped up toward full, so it already held *capacity − added*. It takes the
+current EC (a sensor reading, or the last one you recorded), and **asks you to measure again if the reading is
+too old**; an EC typed there is used instead and can be recorded with one click. The target is the middle of the
+running grows' combined EC range (or a target you enter). Because new water carries no EC, the tank's EC is
+diluted first, and the nutrients make up the rest of the way, so a top-up of weak water doesn't over-dose.
+
+The result is the **total for the water you're adding** and the **amount per gallon (or litre) added**, in ml
+with the weight in grams beneath it. Each product's share comes from the line's dose chart. With several grows in
+different stages, each grow's stage picks a column of the chart and the columns are blended with equal weight.
+EC is assumed to rise in proportion to the dose, and the water you add is assumed to have no EC of its own.
+
+*Elfsys Plant Mana* (PM-1, PM-2, PM-3, PM-ES with the Elfsys feeding chart) is built in. To use another brand,
+choose **Add my own nutrients** (or **Copy … to edit**) and enter its products, their density (g/ml) and the
+chart from its bottle: ml per US gallon for each feeding stage and the EC that mix gives.
+
 ### EC units
 
 Plans and alerts use **mS/cm**. Pick the unit your meter uses and everything you enter and see is

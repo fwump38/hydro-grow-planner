@@ -165,7 +165,7 @@ export function App() {
           ) : tab === "overview" ? (
             <Overview snap={snap} onSnap={setSnap} onStart={(replace) => setWizard({ replace })} onEditPlan={setEditGrow} />
           ) : tab === "templates" ? (
-            <Templates meta={meta} ecUnit={snap.ec_unit} onUse={(template) => setWizard({ template })} />
+            <Templates meta={meta} ecUnit={snap.ec_unit} tempUnit={snap.units.temperature} onUse={(template) => setWizard({ template })} />
           ) : tab === "activity" ? (
             <Activity snap={snap} />
           ) : (

@@ -3,6 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "./api";
 import { addDays, clock, dayLabel, num, shortDate, today, until } from "./format";
 import type { DeviceView, GrowView, Metric, MetricView, Reading, Snapshot, StageView, TaskView } from "./types";
+import { NutrientCard } from "./Nutrients";
 import { Badge, ConfirmButton, Field, NumberInput, Switch, useAction } from "./ui";
 
 interface Props {
@@ -47,6 +48,7 @@ export function Overview({ snap, onSnap, onStart, onEditPlan }: Props) {
         <DevicesCard snap={snap} onSnap={onSnap} />
         <WaterCard snap={snap} onSnap={onSnap} />
       </div>
+      <NutrientCard snap={snap} onSnap={onSnap} />
       <TasksCard snap={snap} onSnap={onSnap} />
     </>
   );

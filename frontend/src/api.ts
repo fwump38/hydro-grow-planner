@@ -2,6 +2,7 @@
 // Home Assistant ingress path.
 
 import type {
+  DoseResult,
   EntityRow,
   FieldError,
   Meta,
@@ -82,6 +83,8 @@ export const api = {
 
   record: (id: string, reading: { ph?: number | null; ec?: number | null }) =>
     post<Snapshot>(`systems/${id}/readings`, reading),
+  calculateNutrients: (id: string, args: { added: number; ec?: number | null; target_ec?: number | null }) =>
+    post<DoseResult>(`systems/${id}/nutrients/calculate`, args),
   waterChecked: (id: string) => post<Snapshot>(`systems/${id}/water-checked`),
   readings: (id: string, days = 14) =>
     get<{ ec_unit: string; readings: Reading[] }>(`systems/${id}/readings?days=${days}`),

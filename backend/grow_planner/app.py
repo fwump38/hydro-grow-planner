@@ -8,6 +8,7 @@ import contextlib
 import logging
 from typing import Any, Protocol
 
+from .core import units
 from .core.models import new_id
 from .core.presets import plan_to_template
 from .engine import GrowError, GrowSystem, new_system_data
@@ -43,6 +44,9 @@ class HAConnection(HAPort, Protocol):
     ) -> None:
         """Subscribe to events."""
 
+    async def get_unit_system(self) -> dict[str, str]:
+        """Return Home Assistant's unit system."""
+
 
 class App:
     """Owns the systems and runs their background loops."""
@@ -63,6 +67,8 @@ class App:
         self.clock = clock
         self.systems: dict[str, GrowSystem] = {}
         self.all_states: dict[str, EntityState] = {}
+        # The units Home Assistant is set to (temperature, volume, weight); empty until known.
+        self.ha_units: dict[str, str] = {}
         self._dirty: set[str] = set()
         self._flusher: asyncio.Task[None] | None = None
         self._wake: dict[str, asyncio.Event] = {}
@@ -99,6 +105,7 @@ class App:
         # Every system reads the one table of entity states, so a device or sensor
         # added later already has a state.
         system.states = self.all_states
+        system.ha_units = self.ha_units
         self._plans_to_templates(system)
         self.systems[system.id] = system
         self._wake[system.id] = asyncio.Event()
@@ -249,12 +256,33 @@ class App:
 
     async def on_ha_connected(self) -> None:
         """Run after (re)connecting to Home Assistant."""
+        await self.refresh_units()
+        try:
+            await self.ha.subscribe(
+                {"type": "subscribe_events", "event_type": "core_config_updated"},
+                lambda _event: asyncio.get_running_loop().create_task(self.refresh_units()),
+            )
+        except Exception:
+            _LOGGER.warning("Could not watch Home Assistant's unit settings", exc_info=True)
         for system in self.systems.values():
             await system.sync(force=True)
             entity = system.data.get("todo_entity")
             if entity:
                 await self._subscribe_todo(system, entity)
             self._on_change(system)
+
+    async def refresh_units(self) -> None:
+        """Read the unit system from Home Assistant; keeps the last known units on failure."""
+        try:
+            found = units.from_ha_unit_system(await self.ha.get_unit_system())
+        except Exception:
+            _LOGGER.warning("Could not read Home Assistant's unit system", exc_info=True)
+            return
+        if found != self.ha_units:
+            self.ha_units.clear()
+            self.ha_units.update(found)
+            for system in self.systems.values():
+                self._on_change(system)
 
     async def _subscribe_todo(self, system: GrowSystem, entity: str) -> None:
         def changed(_event: dict[str, Any]) -> None:

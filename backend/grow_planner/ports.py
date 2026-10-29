@@ -18,6 +18,8 @@ class EntityState:
     state: str
     unit: str | None = None
     name: str | None = None
+    # When the sensor last reported; None when unknown.
+    updated: datetime | None = None
 
 
 class HAPort(Protocol):

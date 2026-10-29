@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0
+
+- **Nutrient calculator.** Set the tank's total capacity in **Settings → Tank & nutrients**, then use
+  **Overview → Add water & nutrients**: enter how much water you're adding and it shows how much of each
+  nutrient to add, both in total and per gallon (or litre) added, in ml and grams. It uses the current EC and
+  asks you to measure again when the reading is older than a limit you set (24 h by default). The target is
+  the middle of the running grows' combined EC range.
+- **Elfsys Plant Mana is built in** (PM-1, PM-2, PM-3 and PM-ES, with the feeding chart and densities). For
+  any other brand, add your own nutrient line: products, densities, and the dose chart from the bottle.
+- **Units follow Home Assistant.** Temperatures, water volumes and nutrient weights use the unit system set in
+  Home Assistant (metric: °C, litres, grams; US customary: °F, gallons, ounces), including tank capacity, the
+  plan editor and template cards, room temperature and its alerts. **Settings → Units** overrides each one per
+  system. The plan editor's per-plan °C/°F switch is gone: plans are edited and saved in the unit in use.
+- Sensor readings now remember when they last reported, so a stale EC sensor is noticed too.
+
 ## 0.7.1
 
 - **Fixed every task being added to the to-do list twice** the first time it syncs to a new list. When the

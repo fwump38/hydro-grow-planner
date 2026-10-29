@@ -8,7 +8,7 @@ import { clock } from "./format";
 import { setDirty } from "./guard";
 import { profile } from "./schedule";
 import type { FieldError, Plan, Schedule, Stage, Task } from "./types";
-import { fromCanonical, toCanonical } from "./units";
+import { fromCanonical, planInUnit, toCanonical } from "./units";
 import { ConfirmButton, Field, NumberInput, Segmented, errorAt, useAction } from "./ui";
 
 export interface Slot {
@@ -21,6 +21,8 @@ interface Props {
   /** The devices (for a plan) or roles (for a template) that can have schedules. */
   slots: Slot[];
   ecUnit: string;
+  /** Temperature unit from Settings / Home Assistant; the plan is edited and saved in it. */
+  tempUnit: string;
   stageTypes: string[];
   taskTypes: string[];
   onSave: (plan: Plan) => Promise<Plan>;
@@ -50,8 +52,8 @@ function blankTask(): Task {
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 export function PlanEditor(props: Props) {
-  const [saved, setSaved] = useState<Plan>(() => clone(props.initial));
-  const [draft, setDraft] = useState<Plan>(() => clone(props.initial));
+  const [saved, setSaved] = useState<Plan>(() => planInUnit(clone(props.initial), props.tempUnit));
+  const [draft, setDraft] = useState<Plan>(() => planInUnit(clone(props.initial), props.tempUnit));
   const [errors, setErrors] = useState<FieldError[]>([]);
   const [selected, setSelected] = useState(0);
   const [dragging, setDragging] = useState<number | null>(null);
@@ -79,8 +81,8 @@ export function PlanEditor(props: Props) {
     setErrors([]);
     try {
       const plan = await props.onSave(draft);
-      setSaved(clone(plan));
-      setDraft(clone(plan));
+      setSaved(planInUnit(clone(plan), props.tempUnit));
+      setDraft(planInUnit(clone(plan), props.tempUnit));
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.fieldErrors.length) setErrors(e.fieldErrors);
@@ -121,12 +123,8 @@ export function PlanEditor(props: Props) {
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
           <RangePair label="pH" lo={draft.ph_min} hi={draft.ph_max} step={0.1} errLo={err("ph_min")} errHi={err("ph_max")}
             onChange={(lo, hi) => edit((p) => { p.ph_min = lo; p.ph_max = hi; })} />
-          <div class="stack" style="gap:6px">
-            <RangePair label={`Temperature (${draft.temp_unit ?? "°C"})`} lo={draft.temp_min} hi={draft.temp_max} errLo={err("temp_min")} errHi={err("temp_max")}
-              onChange={(lo, hi) => edit((p) => { p.temp_min = lo; p.temp_max = hi; })} />
-            <Segmented label="Temperature unit" value={(draft.temp_unit ?? "°C") as string} options={[{ value: "°C", label: "°C" }, { value: "°F", label: "°F" }]}
-              onChange={(v) => edit((p) => (p.temp_unit = v))} />
-          </div>
+          <RangePair label={`Temperature (${props.tempUnit})`} lo={draft.temp_min} hi={draft.temp_max} errLo={err("temp_min")} errHi={err("temp_max")}
+            onChange={(lo, hi) => edit((p) => { p.temp_min = lo; p.temp_max = hi; })} />
           <RangePair label="Humidity (%)" lo={draft.humidity_min} hi={draft.humidity_max} errLo={err("humidity_min")} errHi={err("humidity_max")}
             onChange={(lo, hi) => edit((p) => { p.humidity_min = lo; p.humidity_max = hi; })} />
         </div>
