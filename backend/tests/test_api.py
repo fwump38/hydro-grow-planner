@@ -404,7 +404,9 @@ def test_legacy_devices_get_a_guessed_role() -> None:
 async def test_nutrient_calculator_through_the_api(api) -> None:
     await post(api, f"{api.base}/grows", {**leafy_body(api), "stage": 2})
     body = {"added": 3.4}
-    assert (await api.post(f"{api.base}/nutrients/calculate", json=body)).status == 400  # no capacity
+    assert (
+        await api.post(f"{api.base}/nutrients/calculate", json=body)
+    ).status == 400  # no capacity
     await api.patch(f"{api.base}/config", json={"capacity": 10, "volume_unit": "gal"})
     assert (await api.post(f"{api.base}/nutrients/calculate", json=body)).status == 400  # no EC
     await post(api, f"{api.base}/readings", {"ec": 1.0})

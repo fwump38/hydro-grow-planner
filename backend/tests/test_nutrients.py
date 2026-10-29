@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
 
 from grow_planner.core import nutrients as nut
@@ -149,7 +147,9 @@ async def test_manual_ec_goes_stale(h) -> None:
 
 async def test_sensor_ec_goes_stale_by_its_last_report(h) -> None:
     await grow(h)
-    h.system.update_config(sensors={"ph": None, "ec": "sensor.ec", "temperature": None, "humidity": None})
+    h.system.update_config(
+        sensors={"ph": None, "ec": "sensor.ec", "temperature": None, "humidity": None}
+    )
     h.system.set_state("sensor.ec", EntityState("1.5", "mS/cm", None, h.clock()))
     assert h.system.ec_stale is False
     h.clock.advance(hours=30)
@@ -181,7 +181,11 @@ def test_ha_unit_systems_map_to_the_apps_units() -> None:
 
 async def test_units_follow_home_assistant_unless_overridden(h) -> None:
     s = h.system
-    assert (s.temperature_unit, s.volume_unit, s.weight_unit) == ("°C", "gal", "g")  # no HA, no plan
+    assert (s.temperature_unit, s.volume_unit, s.weight_unit) == (
+        "°C",
+        "gal",
+        "g",
+    )  # no HA, no plan
     s.ha_units.update(temperature="°F", volume="L", weight="oz")
     assert (s.temperature_unit, s.volume_unit, s.weight_unit) == ("°F", "L", "oz")
     s.update_config(temperature_unit="°C", weight_unit="g")

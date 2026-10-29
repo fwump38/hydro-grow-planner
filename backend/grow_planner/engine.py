@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 import logging
 from typing import Any
 
-from .core import units
+from .core import nutrients as nutrient_calc, units
 from .core.const import (
     DEFAULT_EC_UNIT,
     DEFAULT_READING_INTERVAL_DAYS,
@@ -36,7 +36,6 @@ from .core.const import (
     MODE_MANUAL,
 )
 from .core.maintenance import default_maintenance, normalize_maintenance, task_id as maint_task_id
-from .core import nutrients as nutrient_calc
 from .core.models import DeviceSchedule, Plan, Stage, Task, new_id, out_of_range
 from .core.presets import LIGHT_ROLES, PRESET_ROLES, guess_role
 from .core.progress import (
@@ -509,9 +508,7 @@ class GrowSystem:
             if capacity is not None and not 0 < capacity <= 100000:
                 raise GrowError("The tank capacity must be above 0")
             unit = self._resolve("volume_unit", clean.get("volume_unit", self.data["volume_unit"]))
-            clean["capacity_l"] = (
-                None if capacity is None else capacity * _litres_per(unit)
-            )
+            clean["capacity_l"] = None if capacity is None else capacity * _litres_per(unit)
         if "ec_stale_hours" in fields:
             hours = int(fields["ec_stale_hours"])
             if not 1 <= hours <= 24 * 60:
@@ -712,7 +709,11 @@ class GrowSystem:
         """Return a display unit: the setting if it has one, else Home Assistant's, else a default."""
         if override:
             return override
-        ha_key = {"volume_unit": "volume", "temperature_unit": "temperature", "weight_unit": "weight"}
+        ha_key = {
+            "volume_unit": "volume",
+            "temperature_unit": "temperature",
+            "weight_unit": "weight",
+        }
         if found := self.ha_units.get(ha_key[key]):
             return found
         if key == "temperature_unit":
@@ -1388,9 +1389,13 @@ class GrowSystem:
             warnings.append(
                 "The running grows' EC ranges don't overlap, so the oldest grow's range was used."
             )
-        if target_ec is not None and low is not None and high is not None:
-            if not low - 1e-9 <= target <= high + 1e-9:
-                warnings.append("That target is outside the running grows' EC range.")
+        if (
+            target_ec is not None
+            and low is not None
+            and high is not None
+            and not low - 1e-9 <= target <= high + 1e-9
+        ):
+            warnings.append("That target is outside the running grows' EC range.")
         if result["concentrated"] and result["needs_nutrients"]:
             warnings.append(
                 "That is stronger than the feeding chart for plain water because the tank "

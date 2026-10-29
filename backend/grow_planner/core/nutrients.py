@@ -24,10 +24,10 @@ import copy
 from typing import Any
 
 from .const import STAGE_TYPES
+from .units import LITRES_PER_GALLON
 
 Error = dict[str, str]
 
-from .units import LITRES_PER_GALLON, VOLUME_UNITS  # noqa: F401  (re-exported)
 BUILTIN_PREFIX = "builtin:"
 DEFAULT_LINE = f"{BUILTIN_PREFIX}plant_mana"
 DEFAULT_STALE_HOURS = 24
@@ -292,7 +292,5 @@ def calculate(
         "needs_nutrients": rise > 1e-9,
         "products": products,
         "chart_ml_per_gal": full,
-        "concentrated": any(
-            pr["ml_per_gal"] > full[pr["id"]] * 1.001 + 1e-9 for pr in products
-        ),
+        "concentrated": any(pr["ml_per_gal"] > full[pr["id"]] * 1.001 + 1e-9 for pr in products),
     }
