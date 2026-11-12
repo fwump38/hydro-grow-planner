@@ -12,11 +12,11 @@ from .core import units
 from .core.models import new_id
 from .core.presets import plan_to_template
 from .engine import GrowError, GrowSystem, new_system_data
+from .hk_tasks import HKPort, HKSync
 from .mqtt_entities import build, handle_command
 from .ports import Clock, EntityState, HAPort, ReadingsPort
 from .snapshot import snapshot
 from .store import Store
-from .todo_sync import TodoPort, TodoSync
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,8 +36,8 @@ class MqttSink(Protocol):
 class HAConnection(HAPort, Protocol):
     """What the app needs from the HA client beyond HAPort."""
 
-    def todo(self, entity_id: str) -> TodoPort:
-        """Return a to-do list port."""
+    def home_keeper(self) -> HKPort:
+        """Return the Home Keeper port."""
 
     async def subscribe(
         self, payload: dict[str, Any], callback: Callable[[dict[str, Any]], None]
@@ -73,8 +73,8 @@ class App:
         self._flusher: asyncio.Task[None] | None = None
         self._wake: dict[str, asyncio.Event] = {}
         self._tasks: list[asyncio.Task[Any]] = []
-        self._todo_syncs: dict[str, tuple[str, TodoSync]] = {}
-        self._todo_lock = asyncio.Lock()
+        self._hk_syncs: dict[str, HKSync] = {}
+        self._hk_lock = asyncio.Lock()
         self._listeners: set[asyncio.Queue[dict[str, Any]]] = set()
 
     # -- systems ------------------------------------------------------------------------------
@@ -132,7 +132,7 @@ class App:
         if self.systems.pop(system_id, None) is None:
             raise GrowError("Unknown system")
         self._wake.pop(system_id, None)
-        self._todo_syncs.pop(system_id, None)
+        self._hk_syncs.pop(system_id, None)
         self.store.systems.pop(system_id, None)
         self.store.save()
         if self.mqtt is not None:
@@ -173,27 +173,30 @@ class App:
                 except Exception:
                     _LOGGER.exception("Could not publish %s", system.name)
             self._broadcast({"type": "changed", "system_id": system_id})
-            await self._reconcile_todo(system)
+            await self._reconcile_hk(system)
 
     async def settle(self) -> None:
         """Wait for pending change fan-out (used by tests and shutdown)."""
         while self._flusher is not None and not self._flusher.done():
             await self._flusher
 
-    async def _reconcile_todo(self, system: GrowSystem) -> None:
-        entity = system.data.get("todo_entity")
-        if not entity:
-            self._todo_syncs.pop(system.id, None)
-            return
-        cached = self._todo_syncs.get(system.id)
-        if cached is None or cached[0] != entity:
-            cached = (entity, TodoSync(system, self.ha.todo(entity)))
-            self._todo_syncs[system.id] = cached
-        async with self._todo_lock:
+    def hk_available(self, system_id: str) -> bool | None:
+        """Return whether Home Keeper answered the last sync (None before the first)."""
+        sync = self._hk_syncs.get(system_id)
+        return sync.available if sync else None
+
+    async def _reconcile_hk(self, system: GrowSystem) -> None:
+        sync = self._hk_syncs.get(system.id)
+        if sync is None:
+            sync = self._hk_syncs[system.id] = HKSync(system, self.ha.home_keeper())
+        was = sync.available
+        async with self._hk_lock:
             try:
-                await cached[1].reconcile()
+                await sync.reconcile()
             except Exception:
-                _LOGGER.warning("To-do sync with %s failed", entity, exc_info=True)
+                _LOGGER.warning("Home Keeper sync failed", exc_info=True)
+        if sync.available != was:
+            self._broadcast({"type": "changed", "system_id": system.id})
 
     # -- live updates for the panel --------------------------------------------------------------
 
@@ -264,11 +267,9 @@ class App:
             )
         except Exception:
             _LOGGER.warning("Could not watch Home Assistant's unit settings", exc_info=True)
+        await self._subscribe_home_keeper()
         for system in self.systems.values():
             await system.sync(force=True)
-            entity = system.data.get("todo_entity")
-            if entity:
-                await self._subscribe_todo(system, entity)
             self._on_change(system)
 
     async def refresh_units(self) -> None:
@@ -284,14 +285,22 @@ class App:
             for system in self.systems.values():
                 self._on_change(system)
 
-    async def _subscribe_todo(self, system: GrowSystem, entity: str) -> None:
-        def changed(_event: dict[str, Any]) -> None:
-            self._on_change(system)
+    async def _subscribe_home_keeper(self) -> None:
+        """Re-sync whenever a task is done, changed or deleted in Home Keeper."""
 
-        try:
-            await self.ha.subscribe({"type": "todo/item/subscribe", "entity_id": entity}, changed)
-        except Exception:
-            _LOGGER.warning("Could not watch %s", entity, exc_info=True)
+        def changed(event: dict[str, Any]) -> None:
+            data = (event.get("event") or {}).get("data") or {}
+            for system in self.systems.values():
+                sync = self._hk_syncs.get(system.id)
+                if sync is not None:
+                    sync.note_completion(str(data.get("task_id") or ""), data.get("completed_at"))
+                self._on_change(system)
+
+        for event in ("home_keeper_task_completed", "home_keeper_task_deleted"):
+            try:
+                await self.ha.subscribe({"type": "subscribe_events", "event_type": event}, changed)
+            except Exception:
+                _LOGGER.warning("Could not watch Home Keeper's %s events", event, exc_info=True)
 
     # -- background loops ----------------------------------------------------------------------------
 

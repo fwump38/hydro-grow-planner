@@ -12,10 +12,8 @@ from grow_planner.core.presets import build_from_preset
 from grow_planner.engine import GrowError, GrowSystem
 from grow_planner.ports import EntityState
 from grow_planner.snapshot import snapshot
-from grow_planner.todo_sync import TodoSync
 
 from .conftest import Harness
-from .test_todo_sync import FakeTodo
 
 TODAY = date(2026, 9, 20)
 
@@ -240,24 +238,6 @@ async def test_reading_overdue_counts_from_the_earliest_grow(h: Harness) -> None
     await h.start("Herbs", name="New")
     h.clock.advance(days=1, hours=1)
     assert h.system.reading_overdue is True  # 3 days since "Old" began; "New" is a day old
-
-
-async def test_todo_text_names_the_grow_only_when_there_are_several(h: Harness) -> None:
-    two_zones(h)
-    await h.start("Leafy Greens", name="Layers 1+2", stage_ref=3)
-    todo = FakeTodo()
-    sync = TodoSync(h.system, todo)
-    await sync.reconcile()
-    assert not any(s.startswith("Layers 1+2:") for s in todo.open_summaries())
-
-    await h.start("Herbs", name="Layers 3+4")
-    await h.system.add_custom_task("Buy filters")
-    todo2 = FakeTodo()
-    await TodoSync(h.system, todo2).reconcile()
-    summaries = todo2.open_summaries()
-    assert any(s.startswith("Layers 3+4: ") for s in summaries)
-    assert any(s.startswith("Layers 1+2: ") for s in summaries)
-    assert "Buy filters" in summaries
 
 
 def test_a_single_grow_saved_by_an_older_version_is_migrated() -> None:

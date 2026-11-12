@@ -17,7 +17,7 @@ from grow_planner.ports import EntityState
 from grow_planner.store import Store
 
 from .conftest import TZ, FakeClock, FakeHA, FakeReadings
-from .test_todo_sync import FakeTodo
+from .test_hk_tasks import FakeHK
 
 
 class FakeMqtt:
@@ -35,15 +35,15 @@ class FakeMqtt:
 class FakeConnection(FakeHA):
     def __init__(self) -> None:
         super().__init__()
-        self.lists: dict[str, FakeTodo] = {}
+        self.hk = FakeHK()
         self.subscriptions: list[dict[str, Any]] = []
         self.unit_system: dict[str, str] = {}
 
     async def get_unit_system(self) -> dict[str, str]:
         return self.unit_system
 
-    def todo(self, entity_id: str) -> FakeTodo:
-        return self.lists.setdefault(entity_id, FakeTodo())
+    def home_keeper(self) -> FakeHK:
+        return self.hk
 
     async def subscribe(self, payload, callback) -> None:
         self.subscriptions.append(payload)
@@ -67,7 +67,6 @@ def configure(app: App, name: str = "Tower"):
         devices=[
             {"entity_id": "switch.pump", "name": "Pump", "light": False, "role": "water_pump"}
         ],
-        todo_entity="todo.grow",
     )
     return system
 
@@ -103,13 +102,26 @@ async def test_changes_publish_to_mqtt_and_the_panel_once(app: App) -> None:
     assert queue.get_nowait() == {"type": "changed", "system_id": system.id}
 
 
-async def test_tasks_are_mirrored_to_the_todo_list(app: App) -> None:
+async def test_tasks_are_mirrored_to_home_keeper(app: App) -> None:
     system = configure(app)
     app.on_ha_state("switch.pump", EntityState("off"))
     await system.start_grow(leafy_plan(system), stage_ref=3)
     await app.settle()
-    todo = app.ha.todo("todo.grow")
-    assert "Move the grow lights" in todo.open_summaries()
+    assert "Move the grow lights" in app.ha.hk.open_names()
+    assert app.hk_available(system.id) is True
+
+
+async def test_missing_home_keeper_is_reported_and_tolerated(app: App) -> None:
+    system = configure(app)
+    app.ha.hk.down = True
+    app.on_ha_state("switch.pump", EntityState("off"))
+    await system.start_grow(leafy_plan(system), stage_ref=3)
+    await app.settle()
+    assert app.hk_available(system.id) is False
+    app.ha.hk.down = False
+    await system.record_reading(ph=6.1)  # any change re-syncs
+    await app.settle()
+    assert app.hk_available(system.id) is True
 
 
 async def test_state_changes_reach_systems_and_fire_alerts(app: App) -> None:
@@ -137,7 +149,7 @@ async def test_mqtt_command_errors_are_contained(app: App) -> None:
     assert not system.is_active
 
 
-async def test_reconnect_resyncs_and_subscribes_to_todo(app: App) -> None:
+async def test_reconnect_resyncs_and_watches_home_keeper(app: App) -> None:
     system = configure(app)
     app.on_ha_state("switch.pump", EntityState("off"))
     await system.start_grow(leafy_plan(system), stage_ref=3)  # 12:00 is inside a pump run: on
@@ -145,7 +157,8 @@ async def test_reconnect_resyncs_and_subscribes_to_todo(app: App) -> None:
     app.ha.calls.clear()
     await app.on_ha_connected()
     assert ("switch", "turn_on", {"entity_id": "switch.pump"}) in app.ha.calls
-    assert {"type": "todo/item/subscribe", "entity_id": "todo.grow"} in app.ha.subscriptions
+    watched = {s["event_type"] for s in app.ha.subscriptions}
+    assert {"home_keeper_task_completed", "home_keeper_task_deleted"} <= watched
 
 
 async def test_state_survives_a_restart(app: App, tmp_path: Path) -> None:
@@ -190,15 +203,13 @@ async def test_update_config_validation(app: App) -> None:
         {"ec_unit": "furlongs"},
         {"ec_unit": None},
         {"reading_interval_days": 0},
-        {"reminder_time": "soon"},
-        {"todo_entity": "light.x"},
         {"devices": [{"entity_id": "nope"}]},
         {"bogus": 1},
     ):
         with pytest.raises(GrowError):
             system.update_config(**bad)
     assert system.name == "Tower" and system.ec_unit == "mS/cm"
-    system.update_config(ec_unit="ppm 700", reminder_time="07:30:00", reading_interval_days=5)
+    system.update_config(ec_unit="ppm 700", reading_interval_days=5)
     assert system.ec_unit == "ppm 700"
 
 

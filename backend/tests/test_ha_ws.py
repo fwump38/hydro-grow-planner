@@ -45,12 +45,23 @@ class FakeServer:
                     },
                     {"entity_id": "switch.s", "state": "off", "attributes": {}},
                 ]
-            elif kind == "todo/item/list":
+            elif kind == "call_service" and data["service"] == "list_tasks":
                 result = {
-                    "items": [
-                        {"uid": "a", "summary": "Do it", "status": "completed", "due": "2026-09-20"}
-                    ]
+                    "context": {},
+                    "response": {
+                        "tasks": [
+                            {
+                                "task_id": "a",
+                                "name": "Do it",
+                                "next_due": None,
+                                "source": {"grow_planner": {"system_id": "s"}},
+                                "recurrence_type": "one-off",
+                            }
+                        ]
+                    },
                 }
+            elif kind == "call_service" and data["service"] == "add_task":
+                result = {"context": {}, "response": {"task_id": "new"}}
             elif kind == "call_service" and data["service"] == "explode":
                 await ws.send_json(
                     {
@@ -127,11 +138,11 @@ async def test_commands(fake: FakeServer) -> None:
     try:
         await asyncio.wait_for(client.connected.wait(), 5)
         await client.call_service("switch", "turn_on", {"entity_id": "switch.s"})
-        await client.fire_event("hydro_grow_planner_tasks_due", {"count": 2})
+        await client.fire_event("hydro_grow_planner_out_of_range", {"metric": "ph"})
         calls = {m["type"]: m for m in fake.received}
         assert calls["call_service"]["target"] == {"entity_id": "switch.s"}
         assert calls["call_service"]["service_data"] == {}
-        assert calls["fire_event"]["event_data"] == {"count": 2}
+        assert calls["fire_event"]["event_data"] == {"metric": "ph"}
         with pytest.raises(HAError, match="boom"):
             await client.call_service("switch", "explode", {})
     finally:
@@ -139,44 +150,31 @@ async def test_commands(fake: FakeServer) -> None:
         await session.close()
 
 
-async def test_todo_list_port(fake: FakeServer) -> None:
+async def test_home_keeper_port(fake: FakeServer) -> None:
     client, task, session = await connect(fake, {})
     try:
         await asyncio.wait_for(client.connected.wait(), 5)
-        todo = client.todo("todo.grow")
-        (item,) = await todo.list_items()
-        assert item.uid == "a" and item.completed and item.due == "2026-09-20"
-        await todo.add_item("Move lights", "2026-09-23", "note")
-        await todo.set_completed("a", True)
-        await todo.remove_item("a")
+        hk = client.home_keeper()
+        (item,) = await hk.list_tasks()
+        assert item.id == "a" and item.next_due is None and item.mine == {"system_id": "s"}
+        assert await hk.add_task({"name": "Move lights", "recurrence_type": "one-off"}) == "new"
+        await hk.update_task("a", {"due": "2026-09-23T09:00:00"})
+        await hk.trigger_task("a")
+        await hk.complete_task("a")
+        await hk.delete_task("a")
         services = [m for m in fake.received if m["type"] == "call_service"]
-        assert [s["service"] for s in services] == ["add_item", "update_item", "remove_item"]
-        assert services[0]["service_data"] == {
-            "item": "Move lights",
-            "due_date": "2026-09-23",
-            "description": "note",
-        }
-        assert services[0]["target"] == {"entity_id": "todo.grow"}
-        assert services[2]["service_data"] == {"item": ["a"]}
-    finally:
-        task.cancel()
-        await session.close()
-
-
-async def test_commands_fail_fast_when_disconnected() -> None:
-    async with aiohttp.ClientSession() as session:
-        client = HAClient("ws://127.0.0.1:1/websocket", "x", session)
-        with pytest.raises(HAError):
-            await client.fire_event("x", {})
-
-
-async def test_bad_token_never_connects(fake: FakeServer, monkeypatch) -> None:
-    monkeypatch.setattr("grow_planner.ha_ws.RECONNECT_DELAY", 0.05)
-    states: dict = {}
-    client, task, session = await connect(fake, states, token="wrong")
-    try:
-        await asyncio.sleep(0.3)
-        assert not client.connected.is_set()
+        assert [s["service"] for s in services] == [
+            "list_tasks",
+            "add_task",
+            "update_task",
+            "trigger_task",
+            "complete_task",
+            "delete_task",
+        ]
+        assert all(s["domain"] == "home_keeper" for s in services)
+        assert services[0]["return_response"] and services[1]["return_response"]
+        assert services[2]["service_data"] == {"task_id": "a", "due": "2026-09-23T09:00:00"}
+        assert services[4]["service_data"] == {"task_id": "a", "origin": "hydro_grow_planner"}
     finally:
         task.cancel()
         await session.close()

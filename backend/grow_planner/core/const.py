@@ -55,9 +55,6 @@ TASK_TYPES: Final = [
 
 # Events fired on the Home Assistant bus (documented in the README).
 EVENT_PREFIX: Final = f"{APP_SLUG}_"
-EVENT_TASKS_DUE: Final = f"{EVENT_PREFIX}tasks_due"
-EVENT_TASK_CREATED: Final = f"{EVENT_PREFIX}task_created"
-EVENT_TASK_COMPLETED: Final = f"{EVENT_PREFIX}task_completed"
 EVENT_STAGE_COMPLETE_DUE: Final = f"{EVENT_PREFIX}stage_complete_due"
 EVENT_READING_OVERDUE: Final = f"{EVENT_PREFIX}reading_overdue"
 EVENT_OUT_OF_RANGE: Final = f"{EVENT_PREFIX}out_of_range"

@@ -191,6 +191,7 @@ def snapshot(system: GrowSystem, with_profiles: bool = False) -> dict[str, Any]:
             "nutrient_line": nutrient_calc.active_line(system.data["nutrients"])["name"],
         },
         "reading_overdue": system.reading_overdue,
+        "home_keeper": system.home_keeper_available,
         "tasks": tasks,
         "tasks_due": sum(1 for t in tasks if not t["done"] and t["due"] <= now.date().isoformat()),
         "activity": system.rt["activity"][-50:][::-1],

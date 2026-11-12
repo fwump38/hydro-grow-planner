@@ -2780,4 +2780,33 @@ def _harvest_patches() -> None:
         )
 
 
+# Tasks the app now handles on its own, so templates no longer schedule them by date:
+# - temperature: a sensor plus range alerts already watch it;
+# - pH/EC checks: a "Record a reading" task appears only when no reading is recent;
+# - "if needed" top-ups: a nutrient task appears when EC or pH goes out of range.
+_SMART_TASK_TITLES = frozenset(
+    {
+        "Monitor room temperature",
+        "Check water pH",
+        "Add water and nutrients if needed",
+        "Add water if needed",
+    }
+)
+# Dosing on a fixed rhythm is replaced the same way, but only the repeating copies:
+# the one-off "Add nutrients" at the start of Seedling is a real stage-start step.
+_SMART_WHEN_REPEATING = frozenset({"Add nutrients"})
+
+
+def _drop_smart_tasks() -> None:
+    for preset in PRESETS.values():
+        for stage in preset["stages"]:
+            stage["tasks"] = [
+                t
+                for t in stage["tasks"]
+                if t["title"] not in _SMART_TASK_TITLES
+                and not (t["title"] in _SMART_WHEN_REPEATING and t["every"])
+            ]
+
+
 _apply_patches()
+_drop_smart_tasks()

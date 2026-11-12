@@ -22,7 +22,6 @@ from .core import nutrients as nutrient_calc, units
 from .core.const import (
     DEFAULT_EC_UNIT,
     DEFAULT_READING_INTERVAL_DAYS,
-    DEFAULT_REMINDER_TIME,
     EVENT_BACK_IN_RANGE,
     EVENT_GROW_ENDED,
     EVENT_GROW_STARTED,
@@ -30,12 +29,9 @@ from .core.const import (
     EVENT_READING_OVERDUE,
     EVENT_STAGE_CHANGED,
     EVENT_STAGE_COMPLETE_DUE,
-    EVENT_TASK_COMPLETED,
-    EVENT_TASK_CREATED,
-    EVENT_TASKS_DUE,
     MODE_MANUAL,
 )
-from .core.maintenance import default_maintenance, normalize_maintenance, task_id as maint_task_id
+from .core.maintenance import default_maintenance, normalize_maintenance
 from .core.models import DeviceSchedule, Plan, Stage, Task, new_id, out_of_range
 from .core.presets import LIGHT_ROLES, PRESET_ROLES, guess_role
 from .core.progress import (
@@ -44,7 +40,7 @@ from .core.progress import (
     grow_start_for,
 )
 from .core.ranges import EVENT_OUT, RangeAlert, convert_temperature
-from .core.schedule import desired_state, next_transition, parse_time, shift_for_night
+from .core.schedule import desired_state, next_transition, shift_for_night
 from .core.tasks import TaskInstance, due_date, initial_instances, next_instance
 from .ports import Clock, EntityState, HAPort, ReadingsPort
 
@@ -63,9 +59,6 @@ CONFIG_KEYS = {
     "ec_unit",
     "ec_sensor_unit",
     "reading_interval_days",
-    "reminder_time",
-    "todo_entity",
-    "todo_adopt",
     "maintenance",
     "capacity",
     "volume_unit",
@@ -233,9 +226,6 @@ def new_system_data(system_id: str, name: str) -> dict[str, Any]:
         "ec_unit": DEFAULT_EC_UNIT,
         "ec_sensor_unit": None,
         "reading_interval_days": DEFAULT_READING_INTERVAL_DAYS,
-        "reminder_time": DEFAULT_REMINDER_TIME,
-        "todo_entity": None,
-        "todo_adopt": False,
         "maintenance": default_maintenance(),
         # Tank size in litres. Units are None to follow Home Assistant's unit system.
         "capacity_l": None,
@@ -273,7 +263,6 @@ class GrowSystem:
         self._plans_cache: dict[str, tuple[dict[str, Any], Plan]] = {}
 
         data.setdefault("maintenance", default_maintenance())
-        data.setdefault("todo_adopt", False)
         data.setdefault("zones", [])
         data.setdefault("capacity_l", None)
         data.setdefault("volume_unit", None)
@@ -291,10 +280,15 @@ class GrowSystem:
         rt.setdefault("schedule_enabled", True)
         rt.setdefault("last_desired", {})
         rt.setdefault("instances", [])
+        # Upkeep used to be task instances; Home Keeper schedules it now.
+        rt["instances"] = [i for i in rt["instances"] if not i.get("maintenance")]
         rt.setdefault("custom_tasks", {})
         rt.setdefault("grows", {})
         rt.setdefault("grow_seq", 0)
         rt.setdefault("activity", [])
+        # Whether Home Keeper answered its last sync (None before the first); the panel
+        # shows a notice when it did not.
+        self.home_keeper_available: bool | None = None
         rt.setdefault("alerts", {})
         self._alerts = {m: RangeAlert(rt["alerts"].setdefault(m, {})) for m in METRICS}
         self._migrate_single_grow()
@@ -473,19 +467,6 @@ class GrowSystem:
             if not 1 <= days <= 60:
                 raise GrowError("The reading interval must be 1-60 days")
             clean["reading_interval_days"] = days
-        if "reminder_time" in fields:
-            try:
-                parse_time(fields["reminder_time"])
-            except (TypeError, ValueError) as err:
-                raise GrowError("Reminder time must look like 08:00") from err
-            clean["reminder_time"] = fields["reminder_time"]
-        if "todo_entity" in fields:
-            entity = fields["todo_entity"] or None
-            if entity is not None and not str(entity).startswith("todo."):
-                raise GrowError("Pick a to-do list entity")
-            clean["todo_entity"] = entity
-        if "todo_adopt" in fields:
-            clean["todo_adopt"] = bool(fields["todo_adopt"])
         if "maintenance" in fields:
             tasks, problems = normalize_maintenance(fields["maintenance"], self._make_id)
             if problems:
@@ -559,8 +540,6 @@ class GrowSystem:
                 if device.get("zone") not in known:
                     device["zone"] = None
         self.data.update(clean)
-        if "maintenance" in clean:
-            self._ensure_maintenance()
         if "devices" in clean:
             known = {d["id"] for d in clean["devices"]}
             self.rt["last_desired"] = {
@@ -1113,7 +1092,6 @@ class GrowSystem:
                 "stage_started": started.isoformat(),
             },
         )
-        self._ensure_maintenance()
         await self._after_stage_change(grow, None)
         return grow_id
 
@@ -1441,6 +1419,53 @@ class GrowSystem:
         self._log("reading", "Water checked")
         self._changed()
 
+    def smart_conditions(self) -> dict[str, dict[str, str]]:
+        """Return the condition tasks that should exist right now, by key.
+
+        These replace the old date-based "check pH", "monitor temperature" and "add
+        nutrients if needed" tasks: a task only appears when there is something to do.
+        Temperature and humidity get alerts (events and notifications), not tasks.
+        """
+        if not self.is_active:
+            return {}
+        found: dict[str, dict[str, str]] = {}
+        if self.reading_overdue:
+            found["reading"] = {
+                "title": "Record a pH and EC reading",
+                "note": "No pH or EC reading has been recorded recently. Measure the water "
+                "and enter it in Grow Planner (or put a sensor on the system).",
+            }
+        for metric, label in (("ph", "pH"), ("ec", "EC")):
+            if not self._alerts[metric].state["notified"]:
+                continue
+            value = self.value_of(metric)
+            low, high = self.range_for(metric)
+            if value is None:
+                continue
+            if low is not None and value < low:
+                found[f"{metric}_low"] = {
+                    "title": f"{label} is low: add nutrients"
+                    if metric == "ec"
+                    else "pH is low: raise it",
+                    "note": f"{label} is below the target for this stage. Use the Nutrients "
+                    "calculator in Grow Planner for a dose."
+                    if metric == "ec"
+                    else "pH is below the target for this stage. Add a little pH up, mix, and "
+                    "measure again.",
+                }
+            elif high is not None and value > high:
+                found[f"{metric}_high"] = {
+                    "title": f"{label} is high: add water"
+                    if metric == "ec"
+                    else "pH is high: lower it",
+                    "note": f"{label} is above the target for this stage. Top up with plain "
+                    "water to dilute it, then measure again."
+                    if metric == "ec"
+                    else "pH is above the target for this stage. Add a little pH down, mix, "
+                    "and measure again.",
+                }
+        return found
+
     async def evaluate_alerts(self) -> None:
         """Feed current values to the range alerts and fire any transitions."""
         if not self.is_active:
@@ -1477,9 +1502,6 @@ class GrowSystem:
 
     def _task_for(self, inst: dict[str, Any]) -> Task | None:
         """Resolve the Task template behind an instance."""
-        if inst.get("maintenance"):
-            upkeep = self._maintenance(inst["task_id"])
-            return self._upkeep_task(upkeep) if upkeep and upkeep["enabled"] else None
         if inst.get("custom"):
             custom = self.rt["custom_tasks"].get(inst["task_id"])
             if custom is None:
@@ -1517,7 +1539,6 @@ class GrowSystem:
                     "done": done,
                     "every": task.every,
                     "custom": bool(inst.get("custom")),
-                    "maintenance": bool(inst.get("maintenance")),
                     "grow_id": inst.get("grow"),
                     "grow": names.get(inst.get("grow") or ""),
                 }
@@ -1548,33 +1569,17 @@ class GrowSystem:
         if task is not None:
             started = (grow.stage_started if grow else None) or today
             nxt = next_instance(task, today, inst["stage_run"], started, self._make_id)
-        if inst.get("maintenance"):
-            self._maintenance_done(inst["task_id"])
-            if not self.active_grows:
-                nxt = None  # upkeep only repeats while something is growing
         if nxt is not None:
             self.rt["instances"].append(
                 _dump_instance(
                     nxt,
                     custom=bool(inst.get("custom")),
                     grow=inst.get("grow"),
-                    maintenance=bool(inst.get("maintenance")),
                 )
             )
         title = task.title if task else ""
-        fields = self._grow_fields(grow) if grow else {"grow_id": None, "grow": None}
         self._log("task", f"Done: {title}" + (f" ({grow.name})" if grow else ""))
-        if inst.get("maintenance"):
-            self._ensure_maintenance()
         self._changed()
-        await self._fire(
-            EVENT_TASK_COMPLETED,
-            {**fields, "task": title, "next_due": nxt.due.isoformat() if nxt else None},
-        )
-        if nxt is not None:
-            await self._fire(
-                EVENT_TASK_CREATED, {**fields, "task": title, "due": nxt.due.isoformat()}
-            )
 
     async def reopen_task(self, instance_id: str) -> None:
         """Undo a check-off. Recurring tasks cannot be reopened (their next one exists)."""
@@ -1589,10 +1594,6 @@ class GrowSystem:
         """Remove an instance. For a repeating task this also stops the repeat."""
         inst = self._instance(instance_id)
         self.rt["instances"].remove(inst)
-        if inst.get("maintenance"):
-            # Skipping upkeep restarts its clock; it comes back after its interval.
-            self._maintenance_state(inst["task_id"])["base"] = self.today.isoformat()
-            self._ensure_maintenance()
         if inst.get("custom") and not any(
             i["task_id"] == inst["task_id"] for i in self.rt["instances"]
         ):
@@ -1625,118 +1626,50 @@ class GrowSystem:
             _dump_instance(inst, custom=True, grow=tagged.id if tagged else None)
         )
         self._changed()
-        await self._fire(
-            EVENT_TASK_CREATED,
-            {
-                **(self._grow_fields(tagged) if tagged else {"grow_id": None, "grow": None}),
-                "task": title,
-                "due": inst.due.isoformat(),
-            },
-        )
         return inst.instance_id
 
     # ------------------------------------------------------------------
     # System upkeep
     # ------------------------------------------------------------------
 
-    def _maintenance(self, task_id: str) -> dict[str, Any] | None:
-        """Return the upkeep definition behind an instance's task id."""
-        return next(
-            (m for m in self.data["maintenance"] if maint_task_id(m["id"]) == task_id), None
-        )
+    def upkeep_defs(self) -> list[dict[str, Any]]:
+        """Return the enabled upkeep definitions (Home Keeper schedules them; see hk_tasks)."""
+        return [m for m in self.data["maintenance"] if m["enabled"]]
 
-    @staticmethod
-    def _upkeep_task(upkeep: dict[str, Any]) -> Task:
-        return Task(
-            id=maint_task_id(upkeep["id"]),
-            task_type=upkeep["task_type"],
-            title=upkeep["title"],
-            days=(1,),
-            every=upkeep["every"],
-            note=upkeep["note"],
-        )
+    def upkeep_done_on(self, upkeep_id: str) -> date | None:
+        """Return when this upkeep was last done, if ever."""
+        done = self.rt["maintenance"].get(upkeep_id, {}).get("done")
+        return date.fromisoformat(done) if done else None
 
-    def _maintenance_state(self, task_id: str) -> dict[str, Any]:
-        """Return when upkeep was last done (`done`) and its clock restarted (`base`)."""
-        return self.rt["maintenance"].setdefault(task_id.removeprefix("maint_"), {})
+    def upkeep_anchor(self, upkeep_id: str) -> date | None:
+        """Return where this upkeep's clock runs from: last done, else when the system started."""
+        return self.upkeep_done_on(upkeep_id) or self.system_started
 
-    def _maintenance_done(self, task_id: str) -> None:
-        """Record upkeep as done today, and everything it covers."""
-        today = self.today.isoformat()
-        upkeep = self._maintenance(task_id)
-        covered = [maint_task_id(c) for c in upkeep["covers"]] if upkeep else []
-        for tid in (task_id, *covered):
-            state = self._maintenance_state(tid)
-            state["done"] = state["base"] = today
-        for inst in self.rt["instances"]:
-            if (
-                inst.get("maintenance")
-                and inst["task_id"] in covered
-                and not inst.get("completed_on")
-            ):
-                other = self._maintenance(inst["task_id"])
-                if other:
-                    inst["due"] = (self.today + timedelta(days=other["every"])).isoformat()
+    def upkeep_done(self, upkeep_id: str, day: date) -> bool:
+        """Record upkeep as done on `day`; return whether that is news (newer than before)."""
+        known = self.upkeep_done_on(upkeep_id)
+        if known is not None and day <= known:
+            return False
+        self.rt["maintenance"].setdefault(upkeep_id, {})["done"] = day.isoformat()
+        self._changed()
+        return True
 
     def maintenance_view(self) -> list[dict[str, Any]]:
         """Return each upkeep task with when it was last done and when it is next due."""
-        open_due = {
-            i["task_id"]: i["due"]
-            for i in self.rt["instances"]
-            if i.get("maintenance") and not i.get("completed_on")
-        }
         view = []
         for upkeep in self.data["maintenance"]:
-            tid = maint_task_id(upkeep["id"])
-            state = self.rt["maintenance"].get(upkeep["id"], {})
-            last = state.get("done")
+            last = self.upkeep_done_on(upkeep["id"])
+            anchor = self.upkeep_anchor(upkeep["id"])
+            due = max(anchor + timedelta(days=upkeep["every"]), self.today) if anchor else None
             view.append(
                 {
                     **upkeep,
-                    "last_done": last,
-                    "days_since": (self.today - date.fromisoformat(last)).days if last else None,
-                    "next_due": open_due.get(tid),
+                    "last_done": last.isoformat() if last else None,
+                    "days_since": (self.today - last).days if last else None,
+                    "next_due": due.isoformat() if due else None,
                 }
             )
         return view
-
-    def _ensure_maintenance(self) -> None:
-        """Make sure every enabled upkeep task has an open instance while a grow is running.
-
-        The first one falls due `every` days after the system started running (or after
-        the task was last done), and straight away if that is already past, as when a
-        grow is added that began long ago. Instances of removed or disabled tasks go.
-        """
-        rt = self.rt
-        enabled = {maint_task_id(m["id"]): m for m in self.data["maintenance"] if m["enabled"]}
-        kept = [
-            i
-            for i in rt["instances"]
-            if not i.get("maintenance") or i.get("completed_on") or i["task_id"] in enabled
-        ]
-        added = []
-        started = self.system_started
-        if started is not None:
-            open_ids = {
-                i["task_id"] for i in kept if i.get("maintenance") and not i.get("completed_on")
-            }
-            for tid, upkeep in enabled.items():
-                if tid in open_ids:
-                    continue
-                since = self.rt["maintenance"].get(upkeep["id"], {}).get("base")
-                base = max(started, date.fromisoformat(since)) if since else started
-                due = max(base + timedelta(days=upkeep["every"]), self.today)
-                added.append(
-                    _dump_instance(
-                        TaskInstance(self._make_id(), tid, 0, due),
-                        custom=False,
-                        grow=None,
-                        maintenance=True,
-                    )
-                )
-        if added or len(kept) != len(rt["instances"]):
-            rt["instances"] = kept + added
-            self._changed()
 
     # ------------------------------------------------------------------
     # Periodic work
@@ -1744,13 +1677,10 @@ class GrowSystem:
 
     async def tick(self) -> None:
         """Do whatever is due now; safe to call as often as you like."""
-        now = self.now
         await self.sync()
         await self.evaluate_alerts()
-        self._ensure_maintenance()
         await self._maybe_prompt_stage_check()
         await self._maybe_notify_reading_overdue()
-        await self._maybe_send_reminder(now)
         self._prune_done()
 
     async def _maybe_prompt_stage_check(self) -> None:
@@ -1791,42 +1721,6 @@ class GrowSystem:
             },
         )
 
-    async def _maybe_send_reminder(self, now: datetime) -> None:
-        """Fire the daily tasks_due event once the reminder time has passed."""
-        today = now.date().isoformat()
-        remind_at = parse_time(self.data.get("reminder_time", DEFAULT_REMINDER_TIME))
-        if self.rt.get("last_reminder") == today or now.time() < remind_at:
-            return
-        self.rt["last_reminder"] = today
-        self._on_save()
-        due = self.tasks_due()
-        if not due:
-            return
-        grows = self.active_grows
-        # With one grow the event says which plan and stage; with several, see each task's grow.
-        plan = grows[0].plan if len(grows) == 1 else None
-        stage = grows[0].stage if len(grows) == 1 else None
-        await self._fire(
-            EVENT_TASKS_DUE,
-            {
-                "plan": plan.name if plan else None,
-                "stage": stage.name if stage else None,
-                "count": len(due),
-                "tasks": [
-                    {
-                        "title": t["title"],
-                        "task_type": t["task_type"],
-                        "note": t["note"],
-                        "due": t["due"],
-                        "overdue": t["overdue"],
-                        "recurring": t["every"] > 0,
-                        "grow": t["grow"],
-                    }
-                    for t in due
-                ],
-            },
-        )
-
     def _prune_done(self) -> None:
         cutoff = (self.today - timedelta(days=KEEP_DONE_DAYS)).isoformat()
         keep = [
@@ -1839,11 +1733,8 @@ class GrowSystem:
             self._on_save()
 
 
-def _dump_instance(
-    inst: TaskInstance, custom: bool, grow: str | None, maintenance: bool = False
-) -> dict[str, Any]:
+def _dump_instance(inst: TaskInstance, custom: bool, grow: str | None) -> dict[str, Any]:
     return {
-        **({"maintenance": True} if maintenance else {}),
         "grow": grow,
         "id": inst.instance_id,
         "task_id": inst.task_id,

@@ -24,29 +24,47 @@ from grow_planner.api import build_web_app
 from grow_planner.app import App
 from grow_planner.core.models import new_id
 from grow_planner.core.presets import build_from_preset
+from grow_planner.hk_tasks import HKTask
 from grow_planner.ports import EntityState
 from grow_planner.store import ReadingsLog, Store
-from grow_planner.todo_sync import TodoItem
 
 
-class FakeTodo:
+class FakeHomeKeeper:
+    """Just enough of Home Keeper to show the tasks the app pushes."""
+
     def __init__(self) -> None:
-        self.items: dict[str, TodoItem] = {}
+        self.tasks: dict[str, dict[str, Any]] = {}
         self.n = 0
 
-    async def list_items(self) -> list[TodoItem]:
-        return list(self.items.values())
+    async def list_tasks(self) -> list[HKTask]:
+        return [
+            HKTask(t["id"], t["name"], t["next_due"], t["source"], t["recurrence_type"])
+            for t in self.tasks.values()
+        ]
 
-    async def add_item(self, summary: str, due: str | None, description: str) -> None:
+    async def add_task(self, data: dict[str, Any]) -> str:
         self.n += 1
-        self.items[f"u{self.n}"] = TodoItem(f"u{self.n}", summary, False, due, description)
+        task_id = f"t{self.n}"
+        self.tasks[task_id] = {
+            "id": task_id,
+            "name": data["name"],
+            "next_due": data.get("due") or datetime.now().isoformat(),
+            "source": data.get("source") or {},
+            "recurrence_type": data["recurrence_type"],
+        }
+        return task_id
 
-    async def set_completed(self, uid: str, completed: bool) -> None:
-        old = self.items[uid]
-        self.items[uid] = TodoItem(uid, old.summary, completed, old.due, old.description)
+    async def update_task(self, task_id: str, data: dict[str, Any]) -> None:
+        self.tasks[task_id]["next_due"] = data.get("due", self.tasks[task_id]["next_due"])
 
-    async def remove_item(self, uid: str) -> None:
-        self.items.pop(uid, None)
+    async def delete_task(self, task_id: str) -> None:
+        self.tasks.pop(task_id, None)
+
+    async def trigger_task(self, task_id: str) -> None:
+        self.tasks[task_id]["next_due"] = datetime.now().isoformat()
+
+    async def complete_task(self, task_id: str) -> None:
+        self.tasks[task_id]["next_due"] = None
 
 
 class FakeHA:
@@ -54,7 +72,7 @@ class FakeHA:
 
     def __init__(self) -> None:
         self.app: App | None = None
-        self.lists: dict[str, FakeTodo] = {}
+        self.hk = FakeHomeKeeper()
 
     async def call_service(self, domain: str, service: str, data: dict[str, Any]) -> None:
         if service in ("turn_on", "turn_off") and self.app is not None:
@@ -65,8 +83,8 @@ class FakeHA:
     async def fire_event(self, event_type: str, data: dict[str, Any]) -> None:
         logging.getLogger("dev").info("event %s %s", event_type, data)
 
-    def todo(self, entity_id: str) -> FakeTodo:
-        return self.lists.setdefault(entity_id, FakeTodo())
+    def home_keeper(self) -> FakeHomeKeeper:
+        return self.hk
 
     async def subscribe(self, payload: dict[str, Any], callback: Any) -> None:
         return None
@@ -94,7 +112,6 @@ async def main(port: int, empty: bool = False) -> None:
         ("sensor.grow_room_temperature", "Grow room temperature", "71.5", "°F"),
         ("sensor.grow_room_humidity", "Grow room humidity", "46", "%"),
         ("sensor.reservoir_ec", "Reservoir EC", "1450", "µS/cm"),
-        ("todo.grow_tasks", "Grow Tasks", "0", None),
     ]:
         app.on_ha_state(entity, EntityState(state, unit, name))
 
@@ -121,7 +138,6 @@ async def main(port: int, empty: bool = False) -> None:
             "humidity": "sensor.grow_room_humidity",
         },
         ec_unit="ppm 500",
-        todo_entity="todo.grow_tasks",
     )
     ids = {d["name"]: d["id"] for d in system.data["devices"]}
     for key, zone, preset, stage in (

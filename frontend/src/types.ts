@@ -44,7 +44,6 @@ export interface TaskView {
   every: number;
   custom: boolean;
   /** System upkeep (water changes, cleaning…): belongs to the system, not to a grow. */
-  maintenance: boolean;
   grow_id: string | null;
   grow: string | null;
 }
@@ -190,6 +189,8 @@ export interface Snapshot {
   reading_overdue: boolean | null;
   tasks: TaskView[];
   tasks_due: number;
+  /** Whether Home Keeper answered the last sync; null before the first. */
+  home_keeper: boolean | null;
   activity: { at: string; kind: string; message: string }[];
 }
 
@@ -221,9 +222,6 @@ export interface SystemConfig {
   ec_unit: string;
   ec_sensor_unit: string | null;
   reading_interval_days: number;
-  reminder_time: string;
-  todo_entity: string | null;
-  todo_adopt: boolean;
   maintenance: MaintenanceTask[];
   /** In the volume unit currently in use (Home Assistant's unless overridden). */
   capacity: number | null;

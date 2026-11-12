@@ -57,8 +57,6 @@ def test_leafy_greens_vegetative_tasks_repeat() -> None:
     repeating = {t["title"]: t["every"] for t in vegetative["tasks"] if t["every"]}
     assert repeating == {
         "Move the grow lights": 3,
-        "Add nutrients": 3,
-        "Add water if needed": 3,
         "Harvest outer leaves": 5,
     }
 

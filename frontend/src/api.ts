@@ -97,14 +97,6 @@ export const api = {
   stageAction: (id: string, grow: string, action: "advance" | "previous" | "restart") =>
     post<Snapshot>(`systems/${id}/grows/${grow}/stage/${action}`),
 
-  addTask: (
-    id: string,
-    task: { title: string; due?: string; note?: string; every?: number; grow?: string },
-  ) => post<Snapshot>(`systems/${id}/tasks`, task),
-  completeTask: (id: string, task: string) => post<Snapshot>(`systems/${id}/tasks/${task}/complete`),
-  reopenTask: (id: string, task: string) => post<Snapshot>(`systems/${id}/tasks/${task}/reopen`),
-  deleteTask: (id: string, task: string) => del<Snapshot>(`systems/${id}/tasks/${task}`),
-
   growPlan: (id: string, grow: string) => get<Plan>(`systems/${id}/grows/${grow}/plan`),
   saveGrowPlan: (id: string, grow: string, data: Plan) =>
     put<{ plan: Plan }>(`systems/${id}/grows/${grow}/plan`, data),

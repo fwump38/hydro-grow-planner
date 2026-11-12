@@ -13,9 +13,6 @@ from grow_planner.core.const import (
     EVENT_READING_OVERDUE,
     EVENT_STAGE_CHANGED,
     EVENT_STAGE_COMPLETE_DUE,
-    EVENT_TASK_COMPLETED,
-    EVENT_TASK_CREATED,
-    EVENT_TASKS_DUE,
 )
 from grow_planner.engine import GrowError
 from grow_planner.ports import EntityState
@@ -164,7 +161,7 @@ async def test_start_mid_cycle_recurring_tasks_are_due_today(h: Harness) -> None
     await h.start("Leafy Greens", stage_ref=3, stage_started=TODAY - timedelta(days=10))
     due = {t["title"]: t["due"] for t in h.system.task_items()}
     assert due["Move the grow lights"] == TODAY.isoformat()
-    assert due["Add nutrients"] == TODAY.isoformat()
+    assert "Add nutrients" not in due  # replaced by a condition task
     assert "Vegetative" not in due  # one-off day 1 already passed: skipped by default
 
 
@@ -197,18 +194,18 @@ async def test_recurring_task_reappears_three_days_after_completion(h: Harness) 
         t for t in h.system.task_items(include_done=False) if t["title"] == "Move the grow lights"
     ]
     assert [t["due"] for t in nxt] == [(TODAY + timedelta(days=5)).isoformat()]
-    (created,) = h.ha.fired(EVENT_TASK_CREATED)[-1:]
-    assert created["due"] == nxt[0]["due"]
-    assert h.ha.fired(EVENT_TASK_COMPLETED)[-1]["next_due"] == nxt[0]["due"]
 
 
 async def test_recurring_task_keeps_going_past_the_planned_stage_length(h: Harness) -> None:
     await h.start("Leafy Greens", stage_ref=3)
     for _ in range(40):  # 120 days of completions: well past the 90 day stage
-        current = item_open(h, "Add nutrients")
+        current = item_open(h, "Move the grow lights")
         h.clock.advance(days=3)
         await h.system.complete_task(current["id"])
-    assert item_open(h, "Add nutrients")["due"] == (h.system.today + timedelta(days=3)).isoformat()
+    assert (
+        item_open(h, "Move the grow lights")["due"]
+        == (h.system.today + timedelta(days=3)).isoformat()
+    )
 
 
 def item_open(h: Harness, title: str) -> dict:
@@ -249,7 +246,7 @@ async def test_completing_twice_is_harmless(h: Harness) -> None:
     instance = await h.system.add_custom_task("Once")
     await h.system.complete_task(instance)
     await h.system.complete_task(instance)
-    assert len(h.ha.fired(EVENT_TASK_COMPLETED)) == 1
+    assert titles(h, include_done=True).count("Once") == 1
 
 
 async def test_done_tasks_are_pruned_after_a_week(h: Harness) -> None:
@@ -261,27 +258,6 @@ async def test_done_tasks_are_pruned_after_a_week(h: Harness) -> None:
 
 
 # -- reminders and prompts --------------------------------------------------------------------
-
-
-async def test_daily_reminder_fires_once_after_reminder_time(h: Harness) -> None:
-    h.clock.current = h.clock.current.replace(hour=7)
-    await h.start("Leafy Greens")
-    await h.system.tick()
-    assert h.ha.fired(EVENT_TASKS_DUE) == []  # 07:00 is before 08:00
-    h.clock.advance(hours=2)
-    await h.system.tick()
-    await h.system.tick()
-    (event,) = h.ha.fired(EVENT_TASKS_DUE)
-    assert event["count"] == len(event["tasks"]) > 0
-    assert {"title", "due", "overdue", "recurring"} <= set(event["tasks"][0])
-    h.clock.advance(days=1)
-    await h.system.tick()
-    assert len(h.ha.fired(EVENT_TASKS_DUE)) == 2
-
-
-async def test_no_reminder_when_nothing_is_due(h: Harness) -> None:
-    await h.system.tick()
-    assert h.ha.fired(EVENT_TASKS_DUE) == []
 
 
 async def test_reading_overdue_fires_once_until_a_reading_is_recorded(h: Harness) -> None:
@@ -410,7 +386,7 @@ async def test_snapshot_shape(h: Harness) -> None:
     pump = next(d for d in snap["devices"] if d["id"] == "d_pump")
     assert pump["mode"] == "interval" and pump["schedule"] == "15 min every 3 h"
     assert len(pump["profile"]) == 8 and pump["profile"][:2] == [(0, 15), (180, 195)]
-    assert snap["tasks_due"] >= 3
+    assert snap["tasks_due"] >= 1
 
 
 async def test_all_digit_stage_id_is_not_mistaken_for_a_stage_number(h: Harness) -> None:
@@ -435,7 +411,10 @@ async def test_preview_start_changes_nothing_and_describes_the_result(h: Harness
     assert not h.system.is_active and h.ha.calls == []
     assert preview["stage"] == "Vegetative" and preview["stage_day"] == 11
     assert preview["grow_started"] == (TODAY - timedelta(days=24)).isoformat()
-    assert {t["title"] for t in preview["tasks"]} >= {"Move the grow lights", "Add nutrients"}
+    assert {t["title"] for t in preview["tasks"]} >= {
+        "Move the grow lights",
+        "Harvest outer leaves",
+    }
     # A repeating task whose first day has passed is due today; the harvest hasn't started yet.
     assert all(
         t["due"] == TODAY.isoformat()

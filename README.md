@@ -4,7 +4,7 @@
 
 A Home Assistant **app** for running a hydroponic grow from a plan: stages, each with its own light
 and pump schedule, target ranges and day-by-day tasks. It switches your devices on schedule, keeps
-a task list that actually repeats, watches pH, EC, temperature and humidity against the plan, and
+hands its tasks to [Home Keeper](https://github.com/prestomation/ha-home-keeper), watches pH, EC, temperature and humidity against the plan, and
 tells your automations when something needs attention.
 
 It has its own sidebar panel (no cramped config-flow forms) and publishes entities to Home
@@ -35,10 +35,8 @@ broker itself.
    which are grow lights. Optionally add pH, EC, room temperature and humidity sensors; without a
    sensor you record the value by hand.
 2. **Settings → Water readings:** choose your **EC unit** (below).
-3. **Settings → Tasks:** pick a Home Assistant to-do list to mirror tasks into: a *Local To-do* list, or
-   any other to-do entity such as an iCloud Reminders list. The app only touches items it created itself;
-   anything already on the list is left alone. Items you add to the list later become tasks only if you
-   tick *Turn items I add to this list into tasks*.
+3. **Install [Home Keeper](https://github.com/prestomation/ha-home-keeper)** (HACS, then add it under
+   Settings → Devices & services). It is required: all tasks appear there. See [Tasks](#tasks-in-home-keeper).
 4. **Overview → Start a grow.** Pick a template, say which of your devices plays each role, then say
    **which stage you're at and when it started**, and review exactly what will happen.
 5. Running more than one grow on the same tower? See [Several grows at once](#several-grows-at-once).
@@ -47,7 +45,7 @@ broker itself.
 
 **Overview**: the stage timeline, each device with a 24-hour bar of its schedule and a manual
 toggle, pH/EC/temperature/humidity against their targets, a pH/EC box with a **Record** button, and
-your tasks grouped as overdue / today / next 7 days.
+and a Tasks card saying how many are due (the tasks themselves are in Home Keeper).
 
 Nothing you type into the pH/EC box is saved until you press **Record**, so nudging the number up
 and down doesn't create a history of in-between readings.
@@ -93,22 +91,24 @@ indoor kit, not Elfsys figures:
 
 ### System upkeep
 
-Some jobs belong to the system, not to a plan. **Settings → System upkeep** has a repeating task list that
-applies whatever is growing. The defaults suit a deep flow (DFT) kit like the Elfsys one, which holds about 7 gal
+Some jobs belong to the system, not to a plan. **Settings → System upkeep** defines a repeating task list that
+applies whatever is growing. Each one is a native Home Keeper *repeating* task, so Home Keeper keeps its
+history and interval statistics and you can snooze or skip it there.
+The defaults suit a deep flow (DFT) kit like the Elfsys one, which holds about 7 gal
 with two layers and about 10 gal with four. Growers' rule of thumb is that more water stays balanced longer:
 weekly under 2 gal, monthly for 2–5 gal, before flowering and after harvest for 5–10 gal, and mostly top up and
 re-balance above that. So the defaults are: change the water every 90 days (sooner if pH swings or EC creeps up,
 and shorter for a 2-layer kit), clean the pump and drains (56), calibrate the pH meter (30) and deep-clean the
 system (180, and whenever you end a grow). These are starting points, not Elfsys guidance; edit the intervals or
-instructions, turn tasks off, or add your own. Doing the deep clean also restarts the water-change and pump-clean
-clocks.
+instructions, turn tasks off, or add your own. Doing the deep clean also completes the water-change and pump-clean
+tasks in Home Keeper, restarting their clocks.
 
 Upkeep is timed by how long the **system** has been running, not by any one plan: the **System day** counts
 from the oldest running grow's start date. That date is kept when you switch a grow to another plan
 mid-grow (the wizard asks, on by default) and is backdated when you start a grow that began earlier, so a
 grow you add on day 45 gets everything that's already due. After that each task repeats `N` days after you
-check it off. Skipping one (✕) pushes it back a full interval. When nothing is growing the open tasks
-stay for you to clean up after the grow, but they stop repeating.
+check it off. When nothing is growing the tasks are paused (disabled in Home Keeper, with their history kept) and
+resume with the next grow.
 
 ### Several grows at once
 
@@ -125,8 +125,7 @@ its own plan, stage, start date, tasks and night-lighting switch.
   wants it on**. Overview shows who schedules each device.
 - **pH, EC, temperature and humidity targets** are where the grows' ranges overlap. If they don't overlap
   (say a lettuce and a bok choy EC range), the oldest grow's range is used and the panel says so.
-- **Tasks** carry their grow's name, in the panel and in the to-do list once there is more than one grow.
-  A task you add yourself can be for one grow or all of them.
+- **Tasks** carry their grow's name in Home Keeper once there is more than one grow.
 - Each grow gets its own stage prompt and its own set of entities; events say which grow (`grow`,
   `grow_id`).
 
@@ -136,11 +135,27 @@ Choose the stage you're in and the date it started (or "today is day N"). The gr
 worked out from the earlier stages. One-off tasks whose day has passed are skipped (or added as
 overdue, your choice); repeating tasks get their first occurrence today.
 
-### Tasks that repeat
+### Tasks in Home Keeper
 
-A repeating task ("Move the grow lights, every 3 days") reappears **N days after you check it off**,
-so late completion pushes the next one back instead of piling up copies. Check items off in the
-panel or in Home Assistant; both work. Tasks you add yourself can repeat too.
+Grow Planner works out *when* things are due and [Home Keeper](https://github.com/prestomation/ha-home-keeper)
+shows them. Each open task becomes a Home Keeper task "Managed by Grow Planner", with its due date, so it
+appears in Home Keeper's panel, calendar, dashboard card, notifications and any to-do list you sync it to.
+Check it off there; a repeating task ("Move the grow lights, every 3 days") then comes back **N days after you
+check it off**, so late completion pushes the next one back instead of piling up copies. A task you delete in
+Home Keeper is added back; to stop a repeat, remove it from the plan.
+
+Some tasks only exist while there is something to do:
+
+| Task | Appears when | Clears when |
+|---|---|---|
+| Record a pH and EC reading | no reading within the reading interval (not with both sensors) | you record one |
+| EC is low: add nutrients / EC is high: add water | EC out of range for 10 minutes | it is back in range |
+| pH is low / high | pH out of range for 10 minutes | it is back in range |
+| Check if ready for the next stage | the stage reaches its planned length | the stage changes |
+
+Checking one of these off while the problem remains keeps it quiet until it has cleared and returned.
+Temperature and humidity only fire the out-of-range events (and your notifications); a sensor already
+watches them, so there is no task.
 
 Stages never advance on their own. When a stage reaches its planned length you get a "ready to
 move on?" prompt and a task; a person decides.
@@ -204,11 +219,9 @@ the Home Assistant bus; turn them into notifications however you like. Every pay
 
 | Event | When |
 |---|---|
-| `hydro_grow_planner_tasks_due` | Once a day at the reminder time, if tasks are due or overdue. Payload: `plan`, `stage` (only when one grow is running), `count`, `tasks[]` (`title`, `task_type`, `note`, `due`, `overdue`, `recurring`, `grow`) |
 | `hydro_grow_planner_stage_complete_due` | Once, when a stage reaches its planned length: `stage`, `next_stage`, `expected_outcome` |
 | `hydro_grow_planner_reading_overdue` | Once, when no reading was recorded within the interval: `last_reading`, `interval_days` |
 | `hydro_grow_planner_out_of_range` / `_back_in_range` | A metric stayed out of (or back in) range for 10 minutes: `metric` (`ph`, `ec`, `temperature`, `humidity`), `value`, `min`, `max`, `unit` |
-| `hydro_grow_planner_task_created` / `_task_completed` | A repeating or custom task gets a new occurrence / is checked off: `task`, `due` / `next_due` |
 | `hydro_grow_planner_stage_changed`, `_grow_started`, `_grow_ended` | Lifecycle |
 
 **Settings → Events** in the panel lists these with example payloads and a **Send test** button. To watch
@@ -218,22 +231,7 @@ The app's log also prints `Fired event …` for each one it sends.
 
 ### Examples
 
-Daily to-do digest to your phone:
-
-```yaml
-automation:
-  - alias: Grow tasks due
-    triggers:
-      - trigger: event
-        event_type: hydro_grow_planner_tasks_due
-    actions:
-      - action: notify.mobile_app_YOUR_PHONE
-        data:
-          title: "Grow tasks ({{ trigger.event.data.count }})"
-          message: >
-            {% for t in trigger.event.data.tasks %}• {{ t.title }}{{ ' (overdue)' if t.overdue }}
-            {% endfor %}
-```
+Task reminders and digests come from Home Keeper (its notifications, or its "Task became overdue" automation trigger).
 
 pH or EC drifted out of range:
 
@@ -271,7 +269,7 @@ automation:
             {{ trigger.event.data.next_stage or 'the end of the grow' }}?
 ```
 
-Or import the **blueprint** in `blueprints/grow_planner_notify.yaml`, which handles tasks due, stage
+Or import the **blueprint** in `blueprints/grow_planner_notify.yaml`, which handles stage
 ready and reading overdue; you choose the action that sends the message (it can use `{{ title }}`
 and `{{ message }}`).
 

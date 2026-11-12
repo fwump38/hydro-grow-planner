@@ -44,7 +44,7 @@ async def test_health_and_meta(api) -> None:
     assert (await (await api.get("/health")).json()) == {"status": "ok"}
     meta = await (await api.get("/api/meta")).json()
     assert "ppm 500" in meta["ec_units"] and "center_lights" in meta["roles"]
-    assert any(e["event"] == "hydro_grow_planner_tasks_due" for e in meta["events"])
+    assert any(e["event"] == "hydro_grow_planner_out_of_range" for e in meta["events"])
 
 
 async def test_entities_are_listed_and_filtered(api) -> None:
@@ -86,7 +86,7 @@ async def test_start_wizard_flow_mid_cycle(api) -> None:
     grow = started["grows"][0]
     assert started["active"] and grow["stage"]["name"] == "Vegetative"
     assert grow["stage"]["day"] == 11 and grow["grow_day"] == 25
-    assert any(t["title"] == "Add nutrients" for t in started["tasks"])
+    assert any(t["title"] == "Move the grow lights" for t in started["tasks"])
     # The pump runs 15 min every 3 h: eight runs a day.
     pump = started["devices"][0]["profile"]
     assert len(pump) == 8 and pump[0] == [0, 15] and pump[1] == [180, 195]
@@ -244,10 +244,10 @@ async def test_save_a_grow_as_template(api) -> None:
 
 
 async def test_event_test_button_fires_a_marked_sample(api) -> None:
-    await post(api, "/api/events/test", {"event": "hydro_grow_planner_tasks_due"})
+    await post(api, "/api/events/test", {"event": "hydro_grow_planner_out_of_range"})
     (event,) = api.ha.events
-    assert event[0] == "hydro_grow_planner_tasks_due"
-    assert event[1]["test"] is True and event[1]["tasks"]
+    assert event[0] == "hydro_grow_planner_out_of_range"
+    assert event[1]["test"] is True and event[1]["metric"] == "ph"
     assert (await api.post("/api/events/test", json={"event": "nope"})).status == 400
 
 

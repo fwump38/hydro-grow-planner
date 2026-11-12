@@ -1,7 +1,7 @@
 name: Hydro Grow Planner
-version: "0.8.0"
+version: "0.9.0"
 slug: hydro_grow_planner
-description: Plan hydroponic grows, run light and pump schedules, and track tasks and water readings.
+description: Plan hydroponic grows, run light and pump schedules, send tasks to Home Keeper, and track water readings.
 url: https://github.com/fwump38/hydro-grow-planner
 image: ghcr.io/fwump38/hydro-grow-planner
 arch:

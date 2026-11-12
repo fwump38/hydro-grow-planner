@@ -1,8 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
 
 import { api } from "./api";
-import { addDays, clock, dayLabel, num, shortDate, today, until } from "./format";
-import type { DeviceView, GrowView, Metric, MetricView, Reading, Snapshot, StageView, TaskView } from "./types";
+import { clock, dayLabel, num, shortDate, until } from "./format";
+import type { DeviceView, GrowView, Metric, MetricView, Reading, Snapshot, StageView } from "./types";
 import { NutrientCard } from "./Nutrients";
 import { Badge, ConfirmButton, Field, NumberInput, Switch, useAction } from "./ui";
 
@@ -49,7 +49,7 @@ export function Overview({ snap, onSnap, onStart, onEditPlan }: Props) {
         <WaterCard snap={snap} onSnap={onSnap} />
       </div>
       <NutrientCard snap={snap} onSnap={onSnap} />
-      <TasksCard snap={snap} onSnap={onSnap} />
+      <TasksCard snap={snap} />
     </>
   );
 }
@@ -322,85 +322,30 @@ function WaterCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => 
 
 // -- tasks ---------------------------------------------------------------------------------------
 
-function TaskRow({ t, tagged, onToggle, onDelete }: { t: TaskView; tagged: boolean; onToggle: () => void; onDelete: () => void }) {
-  return (
-    <div class={`task ${t.done ? "done" : ""}`}>
-      <input type="checkbox" checked={t.done} onChange={onToggle} aria-label={`${t.done ? "Reopen" : "Complete"} ${t.title}`} />
-      <div class="grow">
-        <div class="row wrap" style="gap:6px">
-          {t.maintenance ? <Badge>system</Badge> : tagged && t.grow ? <Badge kind="accent">{t.grow}</Badge> : null}
-          <span class="title">{t.title}</span>
-          {t.every ? <Badge>every {t.every} {t.every === 1 ? "day" : "days"}</Badge> : null}
-          {t.overdue ? <Badge kind="bad">overdue</Badge> : null}
-        </div>
-        <div class="muted small">{dayLabel(t.due)}</div>
-        {t.note && !t.done ? <details class="small"><summary class="muted">Details</summary><div class="note">{t.note}</div></details> : null}
-      </div>
-      <button class="icon-btn" aria-label={`${t.maintenance ? "Skip" : "Delete"} ${t.title}`} title={t.maintenance ? "Skip this time" : "Delete"} onClick={onDelete}>✕</button>
-    </div>
-  );
-}
-
-function TasksCard({ snap, onSnap }: { snap: Snapshot; onSnap: (s: Snapshot) => void }) {
-  const { run, busy } = useAction();
-  const [title, setTitle] = useState("");
-  const [every, setEvery] = useState<number | null>(null);
-  const [forGrow, setForGrow] = useState("");
-  const tagged = snap.grows.length > 1;
-  const [showDone, setShowDone] = useState(false);
-  const t0 = today();
-  const open = snap.tasks.filter((t) => !t.done);
-  const groups: [string, TaskView[]][] = [
-    ["Overdue", open.filter((t) => t.due < t0)],
-    ["Today", open.filter((t) => t.due === t0)],
-    ["Next 7 days", open.filter((t) => t.due > t0 && t.due <= addDays(t0, 7))],
-    ["Later", open.filter((t) => t.due > addDays(t0, 7))],
-  ];
-  const done = snap.tasks.filter((t) => t.done);
-  const row = (t: TaskView) => (
-    <TaskRow key={t.id} t={t} tagged={tagged} onToggle={() => toggle(t)} onDelete={() => apply(() => api.deleteTask(snap.id, t.id))} />
-  );
-  const apply = (action: () => Promise<Snapshot>) => run(action).then((s) => s && onSnap(s));
-  const toggle = (t: TaskView) => apply(() => (t.done ? api.reopenTask(snap.id, t.id) : api.completeTask(snap.id, t.id)));
+function TasksCard({ snap }: { snap: Snapshot }) {
+  // Tasks live in Home Keeper: it shows, completes, snoozes and notifies about them.
+  if (snap.home_keeper === false) {
+    return (
+      <section class="card" aria-label="Tasks">
+        <h2>Tasks</h2>
+        <p>
+          <Badge kind="bad">Home Keeper not found</Badge>
+        </p>
+        <p class="muted small">
+          Grow Planner's tasks (stage steps, system upkeep, "record a reading", EC or pH out of range) now appear in the{" "}
+          <a href="https://github.com/prestomation/ha-home-keeper" target="_blank" rel="noreferrer">Home Keeper</a> integration. Install it from HACS
+          and add it under Settings → Devices &amp; services, and the tasks will show up there.
+        </p>
+      </section>
+    );
+  }
   return (
     <section class="card" aria-label="Tasks">
       <h2>Tasks</h2>
-      {open.length === 0 ? <p class="muted">Nothing to do. Nice.</p> : null}
-      {groups.map(([name, items]) =>
-        items.length ? (
-          <div key={name}>
-            <h3 class="muted small" style="margin:6px 0 2px">{name}</h3>
-            {items.map(row)}
-          </div>
-        ) : null,
-      )}
-      {done.length ? (
-        <div>
-          <button class="btn ghost small" onClick={() => setShowDone(!showDone)}>{showDone ? "Hide" : "Show"} {done.length} done</button>
-          {showDone ? done.map(row) : null}
-        </div>
-      ) : null}
-      <form
-        class="row wrap"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!title.trim()) return;
-          apply(() => api.addTask(snap.id, { title, every: every ?? 0, grow: forGrow || undefined })).then(() => {
-            setTitle("");
-            setEvery(null);
-          });
-        }}
-      >
-        <input type="text" class="grow" style="min-width:160px" placeholder="Add a task" aria-label="New task" value={title} onInput={(e) => setTitle((e.currentTarget as HTMLInputElement).value)} />
-        {tagged ? (
-          <select aria-label="Task is for" style="width:auto" value={forGrow} onChange={(e) => setForGrow((e.currentTarget as HTMLSelectElement).value)}>
-            <option value="">All grows</option>
-            {snap.grows.map((g) => <option value={g.id} key={g.id}>{g.name}</option>)}
-          </select>
-        ) : null}
-        <span class="row small muted">repeat every <span style="width:64px"><NumberInput value={every} onChange={setEvery} min={0} step={1} placeholder="–" ariaLabel="Repeat every N days" /></span> days</span>
-        <button class="btn" type="submit" disabled={busy || !title.trim()}>Add</button>
-      </form>
+      <p class="muted">
+        {snap.tasks_due ? `${snap.tasks_due} due or overdue.` : "Nothing due."} Tasks are in Home Keeper: open its panel, dashboard card or a synced to-do list to
+        complete them.
+      </p>
     </section>
   );
 }

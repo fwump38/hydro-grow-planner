@@ -81,7 +81,7 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged, onS
     api.config(snap.id).then((c) => { setSaved(c); setDraft(clone(c)); });
   }, [snap.id]);
   useEffect(() => {
-    api.entities(["switch", "light", "fan", "input_boolean", "sensor", "todo"]).then(setEntities);
+    api.entities(["switch", "light", "fan", "input_boolean", "sensor"]).then(setEntities);
   }, []);
 
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
@@ -98,7 +98,6 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged, onS
   };
   const switchable = entities.filter((e) => ["switch", "light", "fan", "input_boolean"].includes(e.entity_id.split(".")[0]));
   const sensors = entities.filter((e) => e.entity_id.startsWith("sensor."));
-  const todos = entities.filter((e) => e.entity_id.startsWith("todo."));
   const unitChanged = draft.ec_unit !== saved.ec_unit;
 
   const save = async () => {
@@ -179,19 +178,6 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged, onS
       <NutrientSettings draft={draft} edit={edit} meta={meta} volume={volumeUnit(draft, snap)} />
 
       <section class="card">
-        <h2>Tasks &amp; reminders</h2>
-        <div class="grid">
-          <Field label="Daily reminder time"><input type="time" value={draft.reminder_time.slice(0, 5)} onInput={(e) => edit((c) => (c.reminder_time = (e.currentTarget as HTMLInputElement).value))} /></Field>
-          <Field label="Mirror tasks to this Home Assistant to-do list" hint="Any to-do list works, e.g. a Local To-do list or an iCloud Reminders list. The app only adds, checks off and removes its own items; it never changes anything else on the list. Checking a task off there works too.">
-            <EntityPicker label="To-do list" value={draft.todo_entity} entities={todos} placeholder="e.g. todo.grow_tasks" onChange={(v) => edit((c) => (c.todo_entity = v))} />
-          </Field>
-          {draft.todo_entity ? (
-            <label class="check"><input type="checkbox" checked={!!draft.todo_adopt} onChange={(e) => edit((c) => (c.todo_adopt = (e.currentTarget as HTMLInputElement).checked))} />Turn items I add to this list into tasks (only items added after you switch this on)</label>
-          ) : null}
-        </div>
-      </section>
-
-      <section class="card">
         <div class="row between">
           <h2>System upkeep</h2>
           <button class="btn small" onClick={() => edit((c) => c.maintenance.push({ id: `new-${Date.now()}`, title: "", note: "", task_type: "reminder", every: 14, enabled: true, covers: [] }))}>+ Add task</button>
@@ -241,17 +227,15 @@ export function Settings({ snap, meta, systems, onSnap, onSelect, onChanged, onS
 }
 
 const EXAMPLE = `automation:
-  - alias: Grow tasks due
+  - alias: Grow reading is overdue
     triggers:
       - trigger: event
-        event_type: hydro_grow_planner_tasks_due
+        event_type: hydro_grow_planner_reading_overdue
     actions:
       - action: notify.mobile_app_YOUR_PHONE
         data:
-          title: "Grow tasks ({{ trigger.event.data.count }})"
-          message: >
-            {% for t in trigger.event.data.tasks %}• {{ t.title }}
-            {% endfor %}`;
+          title: "Time to check the water"
+          message: "No pH or EC reading for {{ trigger.event.data.interval_days }} days."`;
 
 function Events({ meta }: { meta: Meta }) {
   const { run } = useAction();
@@ -259,7 +243,7 @@ function Events({ meta }: { meta: Meta }) {
     <section class="card">
       <h2>Events for your automations</h2>
       <p class="muted small">
-        The app doesn't send notifications itself. It fires these events on the Home Assistant bus, so you can notify however you like. “Send test” fires a sample (marked <code>test: true</code>).
+        Tasks and their reminders are handled by Home Keeper. The app also fires these events on the Home Assistant bus, so you can notify however you like. “Send test” fires a sample (marked <code>test: true</code>).
       </p>
       <p class="muted small">
         To watch them in Home Assistant (Developer tools → Events → Listen to events), enter one exact event name below, or <code>*</code> for everything (prefix patterns like <code>hydro_grow_planner_*</code> don’t match).

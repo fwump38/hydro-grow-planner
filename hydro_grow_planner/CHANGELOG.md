@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.0
+
+- **Tasks now live in Home Keeper.** Install [Home Keeper](https://github.com/prestomation/ha-home-keeper)
+  (HACS) and Grow Planner pushes its tasks there as "Managed by Grow Planner": stage steps with real due dates
+  (so they show in Home Keeper's calendar). System upkeep (change the water, clean the pump, calibrate the
+  pH meter, deep clean) are native repeating Home Keeper tasks, so Home Keeper keeps their history and interval
+  statistics and you can snooze or skip them there. Doing the deep clean completes the tasks it covers. Upkeep
+  is paused (disabled) while nothing is growing. Complete, snooze, sync to a to-do list, or get
+  notifications in Home Keeper; completing a repeating task schedules the next one. Home Keeper is required;
+  Overview shows a notice if it isn't found.
+- **Smart tasks.** "Record a pH and EC reading" appears only when no reading is recent (and clears when you
+  record one or have sensors). EC or pH out of range creates a task ("EC is low: add nutrients", "pH is high:
+  lower it") that clears when the value is back in range. Marking one done while it is still out of range
+  keeps it quiet until it has cleared and comes back.
+- **Removed redundant tasks** from every template: "Monitor room temperature" (a sensor and the range alerts
+  cover it), "Check water pH", "Add water and nutrients if needed" and the repeating "Add nutrients" /
+  "Add water if needed". Temperature and humidity still alert through events, not tasks.
+- **Removed** the add-on's own to-do mirror, daily reminder and the Overview task list; the settings for them
+  (`reminder_time`, `todo_entity`, `todo_adopt`) and the `tasks_due`, `task_created` and `task_completed`
+  events are gone. Existing open tasks are not migrated: the next sync recreates the current ones in Home
+  Keeper. A task deleted in Home Keeper is added back; stop a repeat by deleting it in Grow Planner's plan.
+
 ## 0.8.0
 
 - **Nutrient calculator.** Set the tank's total capacity in **Settings → Tank & nutrients**, then use

@@ -14,8 +14,8 @@ from typing import Any
 
 import aiohttp
 
+from .hk_tasks import HKTask
 from .ports import EntityState
-from .todo_sync import TodoItem
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +96,21 @@ class HAClient:
             payload["target"] = target
         await self.command(payload)
 
+    async def call_service_response(
+        self, domain: str, service: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Call a service that returns data and return that response."""
+        result = await self.command(
+            {
+                "type": "call_service",
+                "domain": domain,
+                "service": service,
+                "service_data": data,
+                "return_response": True,
+            }
+        )
+        return (result or {}).get("response") or {}
+
     async def fire_event(self, event_type: str, data: dict[str, Any]) -> None:
         """Fire an event on the HA bus."""
         await self.command({"type": "fire_event", "event_type": event_type, "event_data": data})
@@ -128,11 +143,11 @@ class HAClient:
         finally:
             self._pending.pop(msg_id, None)
 
-    # -- to-do list (implements todo_sync.TodoPort) ----------------------------------------
+    # -- Home Keeper (implements hk_tasks.HKPort) ------------------------------------------
 
-    def todo(self, entity_id: str) -> TodoList:
-        """Return a to-do list port for one entity."""
-        return TodoList(self, entity_id)
+    def home_keeper(self) -> HomeKeeper:
+        """Return the Home Keeper port."""
+        return HomeKeeper(self)
 
     # -- connection loop -----------------------------------------------------------------------
 
@@ -221,48 +236,43 @@ class HAClient:
                         _LOGGER.exception("Error handling an event")
 
 
-class TodoList:
-    """One Home Assistant to-do list (see todo_sync.TodoPort)."""
+class HomeKeeper:
+    """Home Keeper's task services (see hk_tasks.HKPort)."""
 
-    def __init__(self, client: HAClient, entity_id: str) -> None:
-        """Wrap a list entity."""
+    DOMAIN = "home_keeper"
+
+    def __init__(self, client: HAClient) -> None:
+        """Wrap a client."""
         self.client = client
-        self.entity_id = entity_id
 
-    async def list_items(self) -> list[TodoItem]:
-        """Return every item."""
-        result = await self.client.command({"type": "todo/item/list", "entity_id": self.entity_id})
-        return [
-            TodoItem(
-                uid=i["uid"],
-                summary=i["summary"],
-                completed=i.get("status") == "completed",
-                due=i.get("due"),
-                description=i.get("description") or "",
-            )
-            for i in result["items"]
-        ]
+    async def list_tasks(self) -> list[HKTask]:
+        """Return every task; raises HAError when Home Keeper is not installed or loaded."""
+        response = await self.client.call_service_response(self.DOMAIN, "list_tasks", {})
+        return [HKTask.from_dict(t) for t in response.get("tasks", [])]
 
-    async def add_item(self, summary: str, due: str | None, description: str) -> None:
-        """Add an open item."""
-        data: dict[str, Any] = {"item": summary}
-        if due:
-            data["due_date"] = due
-        if description:
-            data["description"] = description
-        await self.client.call_service("todo", "add_item", data, {"entity_id": self.entity_id})
+    async def add_task(self, data: dict[str, Any]) -> str:
+        """Create a task and return its id."""
+        response = await self.client.call_service_response(self.DOMAIN, "add_task", data)
+        task_id = response.get("task_id")
+        if not task_id:
+            raise HAError("Home Keeper did not return a task id")
+        return str(task_id)
 
-    async def set_completed(self, uid: str, completed: bool) -> None:
-        """Check an item off or reopen it."""
-        await self.client.call_service(
-            "todo",
-            "update_item",
-            {"item": uid, "status": "completed" if completed else "needs_action"},
-            {"entity_id": self.entity_id},
-        )
+    async def update_task(self, task_id: str, data: dict[str, Any]) -> None:
+        """Change a task."""
+        await self.client.call_service(self.DOMAIN, "update_task", {"task_id": task_id, **data})
 
-    async def remove_item(self, uid: str) -> None:
-        """Delete an item."""
-        await self.client.call_service(
-            "todo", "remove_item", {"item": [uid]}, {"entity_id": self.entity_id}
-        )
+    async def delete_task(self, task_id: str) -> None:
+        """Delete a task."""
+        await self.client.call_service(self.DOMAIN, "delete_task", {"task_id": task_id})
+
+    async def trigger_task(self, task_id: str) -> None:
+        """Arm a triggered task."""
+        await self.client.call_service(self.DOMAIN, "trigger_task", {"task_id": task_id})
+
+    async def complete_task(self, task_id: str, completed_at: str | None = None) -> None:
+        """Complete a task as Grow Planner."""
+        data = {"task_id": task_id, "origin": "hydro_grow_planner"}
+        if completed_at:
+            data["completed_at"] = completed_at
+        await self.client.call_service(self.DOMAIN, "complete_task", data)
